@@ -1,0 +1,8 @@
+.gocache/
+.git/
+.github/
+*.exe
+*.md
+Dockerfile
+.dockerignore
+.gitignore

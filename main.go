@@ -16,7 +16,7 @@ func main() {
 	configPath := flag.String("config", "", "path to a JSON config file (default: config.json if present)")
 	flag.Parse()
 
-	logger := log.New(os.Stdout, "[Freebuff-Go] ", log.LstdFlags|log.Lmsgprefix)
+	logger := log.New(os.Stdout, "[Freebuff2API] ", log.LstdFlags|log.Lmsgprefix)
 
 	// Auto-detect config.json in CWD when no flag is given
 	if *configPath == "" {

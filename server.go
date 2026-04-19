@@ -104,7 +104,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			"id":         model,
 			"object":     "model",
 			"created":    created,
-			"owned_by":   "Freebuff-Go",
+			"owned_by":   "Freebuff2API",
 			"root":       model,
 			"permission": []any{},
 		})

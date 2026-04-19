@@ -31,6 +31,8 @@ type tokenPool struct {
 	mu            sync.Mutex
 	runs          map[string]*managedRun // agentID → current run
 	draining      []*managedRun
+	session       *cachedSession
+	sessionRefreshCh chan struct{}
 	lastError     string
 	cooldownUntil time.Time
 }
@@ -53,6 +55,9 @@ type tokenSnapshot struct {
 	Name          string        `json:"name"`
 	Runs          []runSnapshot `json:"runs"`
 	DrainingRuns  int           `json:"draining_runs"`
+	SessionStatus string        `json:"session_status,omitempty"`
+	SessionInstanceID string    `json:"session_instance_id,omitempty"`
+	SessionExpiresAt time.Time  `json:"session_expires_at,omitempty"`
 	CooldownUntil time.Time    `json:"cooldown_until,omitempty"`
 	LastError     string        `json:"last_error,omitempty"`
 }
@@ -205,6 +210,10 @@ func (p *tokenPool) acquire(ctx context.Context, agentID string) (*runLease, err
 		}
 	}
 
+	if _, err := p.ensureSession(ctx); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	run = p.runs[agentID]
@@ -257,6 +266,9 @@ func (p *tokenPool) shutdown(ctx context.Context) error {
 		if err := p.client.FinishRun(ctx, p.token, run.id, run.requestCount); err != nil {
 			errs = append(errs, err.Error())
 		}
+	}
+	if err := p.endSession(ctx); err != nil {
+		errs = append(errs, err.Error())
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
@@ -399,6 +411,11 @@ func (p *tokenPool) snapshot() tokenSnapshot {
 		DrainingRuns:  len(p.draining),
 		CooldownUntil: p.cooldownUntil,
 		LastError:     p.lastError,
+	}
+	if p.session != nil {
+		snapshot.SessionStatus = string(p.session.status)
+		snapshot.SessionInstanceID = p.session.instanceID
+		snapshot.SessionExpiresAt = p.session.expiresAt
 	}
 	for agentID, run := range p.runs {
 		snapshot.Runs = append(snapshot.Runs, runSnapshot{

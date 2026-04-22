@@ -30,6 +30,7 @@ type freeSessionResponse struct {
 	InstanceID             string `json:"instanceId"`
 	Position               int    `json:"position"`
 	QueueDepth             int    `json:"queueDepth"`
+	QueuedAt               string `json:"queuedAt"`
 	ExpiresAt              string `json:"expiresAt"`
 	RemainingMs            int64  `json:"remainingMs"`
 	EstimatedWaitMs        int64  `json:"estimatedWaitMs"`
@@ -160,6 +161,7 @@ func (p *tokenPool) refreshSession(ctx context.Context) (*cachedSession, string,
 			if instanceID == "" {
 				return nil, "", fmt.Errorf("free session queued response missing instanceId")
 			}
+			p.logQueuePosition(state)
 			delay := queuedPollDelay(state)
 			return &cachedSession{
 				status:     sessionStatusQueued,
@@ -218,6 +220,55 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (p *tokenPool) logQueuePosition(state freeSessionResponse) {
+	var parts []string
+
+	if state.QueueDepth > 0 {
+		parts = append(parts, fmt.Sprintf("position %d/%d", state.Position, state.QueueDepth))
+	} else if state.Position > 0 {
+		parts = append(parts, fmt.Sprintf("position %d", state.Position))
+	}
+
+	if state.EstimatedWaitMs > 0 {
+		parts = append(parts, "~"+formatWaitDuration(time.Duration(state.EstimatedWaitMs)*time.Millisecond)+" remaining")
+	}
+
+	if state.QueuedAt != "" {
+		if queuedAt, err := time.Parse(time.RFC3339, state.QueuedAt); err == nil {
+			parts = append(parts, "elapsed "+formatElapsedDuration(time.Since(queuedAt)))
+		}
+	}
+
+	if len(parts) > 0 {
+		p.logger.Printf("%s: waiting room: %s", p.name, strings.Join(parts, ", "))
+	} else {
+		p.logger.Printf("%s: waiting room: queued", p.name)
+	}
+}
+
+func formatWaitDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	if d < time.Minute {
+		return "< 1 min"
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%d min", minutes)
+}
+
+func formatElapsedDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) % 60
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %02ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
 func (p *tokenPool) endSession(ctx context.Context) error {

@@ -900,124 +900,122 @@ func convertOpenAIStreamPayloadToClaudeEvents(payload []byte, state *claudeStrea
 		state.MessageStarted = true
 	}
 
-	if len(chunk.Choices) == 0 {
-		return events, nil
-	}
+	if len(chunk.Choices) > 0 {
+		choice := chunk.Choices[0]
+		for _, text := range collectReasoningTexts(choice.Delta.ReasoningContent) {
+			stopTextContentBlock(state, &events)
+			if !state.ThinkingStarted {
+				index := nextClaudeBlockIndex(state, &state.ThinkingBlockIdx)
+				payload, err := json.Marshal(map[string]any{
+					"type":  "content_block_start",
+					"index": index,
+					"content_block": map[string]any{
+						"type":     "thinking",
+						"thinking": "",
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+				events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
+				state.ThinkingStarted = true
+			}
 
-	choice := chunk.Choices[0]
-	for _, text := range collectReasoningTexts(choice.Delta.ReasoningContent) {
-		stopTextContentBlock(state, &events)
-		if !state.ThinkingStarted {
-			index := nextClaudeBlockIndex(state, &state.ThinkingBlockIdx)
 			payload, err := json.Marshal(map[string]any{
-				"type":  "content_block_start",
-				"index": index,
-				"content_block": map[string]any{
-					"type":     "thinking",
-					"thinking": "",
+				"type":  "content_block_delta",
+				"index": state.ThinkingBlockIdx,
+				"delta": map[string]any{
+					"type":     "thinking_delta",
+					"thinking": text,
 				},
 			})
 			if err != nil {
 				return nil, err
 			}
-			events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
-			state.ThinkingStarted = true
+			events = append(events, claudeSSEEvent{Name: "content_block_delta", Payload: payload})
 		}
 
-		payload, err := json.Marshal(map[string]any{
-			"type":  "content_block_delta",
-			"index": state.ThinkingBlockIdx,
-			"delta": map[string]any{
-				"type":     "thinking_delta",
-				"thinking": text,
-			},
-		})
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, claudeSSEEvent{Name: "content_block_delta", Payload: payload})
-	}
+		if choice.Delta.Content != "" {
+			stopThinkingContentBlock(state, &events)
+			if !state.TextContentStarted {
+				index := nextClaudeBlockIndex(state, &state.TextContentBlockIdx)
+				payload, err := json.Marshal(map[string]any{
+					"type":  "content_block_start",
+					"index": index,
+					"content_block": map[string]any{
+						"type": "text",
+						"text": "",
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+				events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
+				state.TextContentStarted = true
+			}
 
-	if choice.Delta.Content != "" {
-		stopThinkingContentBlock(state, &events)
-		if !state.TextContentStarted {
-			index := nextClaudeBlockIndex(state, &state.TextContentBlockIdx)
 			payload, err := json.Marshal(map[string]any{
-				"type":  "content_block_start",
-				"index": index,
-				"content_block": map[string]any{
-					"type": "text",
-					"text": "",
+				"type":  "content_block_delta",
+				"index": state.TextContentBlockIdx,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": choice.Delta.Content,
 				},
 			})
 			if err != nil {
 				return nil, err
 			}
-			events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
-			state.TextContentStarted = true
+			events = append(events, claudeSSEEvent{Name: "content_block_delta", Payload: payload})
 		}
 
-		payload, err := json.Marshal(map[string]any{
-			"type":  "content_block_delta",
-			"index": state.TextContentBlockIdx,
-			"delta": map[string]any{
-				"type": "text_delta",
-				"text": choice.Delta.Content,
-			},
-		})
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, claudeSSEEvent{Name: "content_block_delta", Payload: payload})
-	}
+		for _, toolCall := range choice.Delta.ToolCalls {
+			state.SawToolCall = true
+			stopThinkingContentBlock(state, &events)
+			stopTextContentBlock(state, &events)
 
-	for _, toolCall := range choice.Delta.ToolCalls {
-		state.SawToolCall = true
-		stopThinkingContentBlock(state, &events)
-		stopTextContentBlock(state, &events)
+			accumulator := state.ToolBlocks[toolCall.Index]
+			if accumulator == nil {
+				accumulator = &claudeToolCallState{}
+				state.ToolBlocks[toolCall.Index] = accumulator
+			}
 
-		accumulator := state.ToolBlocks[toolCall.Index]
-		if accumulator == nil {
-			accumulator = &claudeToolCallState{}
-			state.ToolBlocks[toolCall.Index] = accumulator
+			if strings.TrimSpace(toolCall.ID) != "" {
+				accumulator.ID = toolCall.ID
+			}
+			if strings.TrimSpace(toolCall.Function.Name) != "" {
+				accumulator.Name = toolCall.Function.Name
+			}
+			if toolCall.Function.Arguments != "" {
+				accumulator.Arguments.WriteString(toolCall.Function.Arguments)
+			}
+
+			if !accumulator.Started && accumulator.Name != "" {
+				blockIndex := toolCallBlockIndex(state, toolCall.Index)
+				payload, err := json.Marshal(map[string]any{
+					"type":  "content_block_start",
+					"index": blockIndex,
+					"content_block": map[string]any{
+						"type":  "tool_use",
+						"id":    sanitizeClaudeToolID(accumulator.ID),
+						"name":  accumulator.Name,
+						"input": map[string]any{},
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+				events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
+				accumulator.Started = true
+			}
 		}
 
-		if strings.TrimSpace(toolCall.ID) != "" {
-			accumulator.ID = toolCall.ID
-		}
-		if strings.TrimSpace(toolCall.Function.Name) != "" {
-			accumulator.Name = toolCall.Function.Name
-		}
-		if toolCall.Function.Arguments != "" {
-			accumulator.Arguments.WriteString(toolCall.Function.Arguments)
-		}
-
-		if !accumulator.Started && accumulator.Name != "" {
-			blockIndex := toolCallBlockIndex(state, toolCall.Index)
-			payload, err := json.Marshal(map[string]any{
-				"type":  "content_block_start",
-				"index": blockIndex,
-				"content_block": map[string]any{
-					"type":  "tool_use",
-					"id":    sanitizeClaudeToolID(accumulator.ID),
-					"name":  accumulator.Name,
-					"input": map[string]any{},
-				},
-			})
+		if choice.FinishReason != "" {
+			state.FinishReason = choice.FinishReason
+			var err error
+			events, err = appendClaudeFinalContentEvents(events, state)
 			if err != nil {
 				return nil, err
 			}
-			events = append(events, claudeSSEEvent{Name: "content_block_start", Payload: payload})
-			accumulator.Started = true
-		}
-	}
-
-	if choice.FinishReason != "" {
-		state.FinishReason = choice.FinishReason
-		var err error
-		events, err = appendClaudeFinalContentEvents(events, state)
-		if err != nil {
-			return nil, err
 		}
 	}
 

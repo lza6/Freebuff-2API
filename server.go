@@ -70,7 +70,9 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) authorized(r *http.Request) bool {
 	if apiKey := strings.TrimSpace(r.Header.Get("x-api-key")); apiKey != "" {
-		return containsString(s.cfg.APIKeys, apiKey)
+		if containsString(s.cfg.APIKeys, apiKey) {
+			return true
+		}
 	}
 
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))

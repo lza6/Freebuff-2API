@@ -1,0 +1,17 @@
+{
+  "name": "freebuff-2api-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Freebuff2API Cloudflare Worker — SaaS proxy for codebuff.com free models",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply f2db-main",
+    "db:migrate:remote": "wrangler d1 migrations apply f2db-main --remote",
+    "tail": "wrangler tail",
+    "secret:set": "wrangler secret put APP_ENCRYPTION_KEY"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}

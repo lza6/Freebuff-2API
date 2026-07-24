@@ -1,0 +1,28 @@
+name = "shy-block-f2db"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "2a1be470e4ff42668735bcede52d5a02"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "f2db-main"
+database_id = "d13ef24f-92ff-41a9-8a85-dde560995acc"
+migrations_dir = "./migrations"
+
+[[durable_objects.bindings]]
+name = "USER_STATE"
+class_name = "UserStateDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UserStateDO"]
+
+[triggers]
+crons = ["0 */6 * * *"]
+
+[observability]
+enabled = true

@@ -1,6 +1,6 @@
 # Freebuff2API
 
-[English](README.md) | [简体中文](README_zh.md)
+> 简体中文。主文档：[README.md](README.md)（中文）｜English: [README_en.md](README_en.md)
 
 Freebuff2API 是 [Freebuff](https://freebuff.com) 的 OpenAI 兼容代理服务器。本项目将标准 OpenAI API 请求转化为 Freebuff 后端格式，让你能在任何 OpenAI 兼容客户端、SDK 或命令行工具中直接使用 Freebuff 的免费模型。
 

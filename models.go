@@ -17,19 +17,20 @@ import (
 const (
 	freeAgentsSourceURL  = "https://raw.githubusercontent.com/CodebuffAI/codebuff/main/common/src/constants/free-agents.ts"
 	modelRefreshInterval = 6 * time.Hour
+	rootAgentID          = "base2-free"
 )
 
-// hardcodedFallback is used when the remote fetch fails on startup.
+// hardcodedFallback 为内置模型注册表（上游 free-agents.ts 已改用常量引用，正则无法解析，
+// 以本表为权威底座；远程解析结果仅作增量补充）。子代理必须挂在根 agent 之下。
 var hardcodedFallback = map[string][]string{
-	"base2-free":         {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
-	"file-picker":        {"google/gemini-2.5-flash-lite"},
-	"file-picker-max":    {"google/gemini-3.1-flash-lite-preview"},
-	"file-lister":        {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-web":     {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-docs":    {"google/gemini-3.1-flash-lite-preview"},
-	"basher":             {"google/gemini-3.1-flash-lite-preview"},
-	"editor-lite":        {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
-	"code-reviewer-lite": {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
+	rootAgentID:                {"google/gemini-2.5-flash-lite"},
+	"file-picker":              {"google/gemini-2.5-flash-lite"},
+	"file-picker-max":          {"google/gemini-3.1-flash-lite-preview"},
+	"file-lister":              {"google/gemini-3.1-flash-lite-preview"},
+	"researcher-web":           {"google/gemini-3.1-flash-lite-preview"},
+	"researcher-docs":          {"google/gemini-3.1-flash-lite-preview"},
+	"basher":                   {"google/gemini-3.1-flash-lite-preview"},
+	"browser-use":              {"google/gemini-3.1-flash-lite-preview"},
 }
 
 // ModelRegistry fetches and caches the agent→model mapping for all free agents
@@ -152,6 +153,17 @@ func (r *ModelRegistry) refresh(ctx context.Context) error {
 		return fmt.Errorf("no free agents found in source")
 	}
 
+	// 以 hardcodedFallback 为底座合并：上游源码改用常量引用（如 FREEBUFF_*_MODEL_ID）
+	// 后正则无法解析，合并保证列表只增不减；远程解析到的条目覆盖/新增。
+	merged := make(map[string][]string, len(hardcodedFallback)+len(all))
+	for agentID, models := range hardcodedFallback {
+		merged[agentID] = models
+	}
+	for agentID, models := range all {
+		merged[agentID] = models
+	}
+	all = merged
+
 	modelToAgent, allModels := buildModelMapping(all)
 
 	r.mu.Lock()
@@ -179,13 +191,14 @@ func (r *ModelRegistry) loadFallback() {
 
 // parseAllFreeModels extracts ALL agent→models mappings from the free-agents.ts source.
 func parseAllFreeModels(source string) map[string][]string {
-	blockPattern := regexp.MustCompile(`'([^']+)':\s*new\s+Set\(\[([^\]]*)\]\)`)
+	// Match: 'agent-id': new Set([...]) | 'agent-id': GEMINI_HELPER_MODELS | 'agent-id': [model,...]
+	blockPattern := regexp.MustCompile(`'([^']+)':\s*(new\s+Set\(\[([^\]]*)\]\)|GEMINI_HELPER_MODELS|[A-Z_]+(?:_MODEL_ID|_MODELS)?)`)
 	modelPattern := regexp.MustCompile(`'([^']+)'`)
 
 	result := make(map[string][]string)
 	for _, match := range blockPattern.FindAllStringSubmatch(source, -1) {
 		agentID := match[1]
-		modelsStr := match[2]
+		modelsStr := match[3]
 
 		var models []string
 		for _, modelMatch := range modelPattern.FindAllStringSubmatch(modelsStr, -1) {

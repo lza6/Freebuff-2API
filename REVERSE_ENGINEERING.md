@@ -2,7 +2,7 @@
 
 > 一次完整的协议逆向实录：从抓包分析、绕过 CLI 检测，到修复 run 层级与模型收紧，最终落地一个本地可用的 OpenAI / Claude 双协议代理。
 >
-> 项目：[Freebuff2API](https://github.com/Quorinex/Freebuff2API)（Go 实现，单文件二进制）
+> 项目：[Freebuff2API](https://github.com/lza6/Freebuff-2API)（Go 实现，单文件二进制）
 
 ---
 
@@ -241,7 +241,7 @@ POST /v1/messages  (Claude 协议)
 
 ## 项目地址
 
-- **Freebuff2API**：https://github.com/Quorinex/Freebuff2API
+- **Freebuff2API**：https://github.com/lza6/Freebuff-2API
 - 单文件 Go 二进制，`config.json` 填入 authToken 即可跑
 - Token 获取：https://freebuff.llm.pm （登录后直接显示）
 

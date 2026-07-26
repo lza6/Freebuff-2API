@@ -1,0 +1,13 @@
+# 编译产物
+freebuff2api.exe
+*.exe
+*.log
+
+# 本地配置（含密钥，不入库）
+config.json
+
+# npm 临时包与解包源码
+*.tgz
+cfworker/*-src/
+cfworker/node_modules/
+node_modules/

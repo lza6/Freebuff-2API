@@ -84,6 +84,36 @@ npm i -g freebuff
 
 同时设置时，环境变量优先于 JSON 配置文件。
 
+## 可用模型与上游限制
+
+可用模型列表**并不等于** Freebuff 官方宣传的全部模型——上游免费层目前在请求时会拒绝绝大多数模型。下表为**实际可用**的组合，已对线上游逐一做过端到端实测（2026-07）。
+
+| 模型 | 状态 |
+|---|---|
+| `google/gemini-2.5-flash-lite` | ✅ 可用（聊天、流式、Claude 协议均验证通过） |
+| `google/gemini-3.1-flash-lite-preview` | ✅ 可用 |
+| `deepseek/deepseek-v4-pro`、`deepseek/deepseek-v4-flash` | ❌ 上游拒绝（`free_mode_invalid_agent_model`） |
+| `minimax/minimax-m3`、`z-ai/glm-v5.2`、`moonshotai/kimi-k2-thinking` | ❌ 上游拒绝 |
+| `xiaomi/mimo-v2.5-flash/pro`、`hy3/hy3*`、`poolside/laguna-s-2-1*` | ❌ 上游拒绝 |
+
+为什么会有出入：Codebuff 免费层收紧了校验。他们开源仓库里的 `free-agents.ts` 仍然列着很多模型，但后端现在只认特定的 agent + model 组合。非 Gemini 模型一律返回：
+
+```json
+{"error":"free_mode_invalid_agent_model","message":"Free mode is only available for specific agent and model combinations."}
+```
+
+因此本项目的模型注册表内置了一份**经过实测筛选的硬编码清单**（见 `models.go`）。程序仍会定期拉取上游 `free-agents.ts` 作为**增量补充**，但硬编码清单是权威底座——即使上游源码重构（例如改用 `FREEBUFF_*_MODEL_ID` 常量引用，正则无法解析）也不会让可用列表缩水。
+
+### Run 层级（为什么重要）
+
+Freebuff 强制要求以会话为根的 run 层级结构：
+
+1. 必须先建立**会话**（`POST /api/v1/freebuff/session`）。
+2. 必须在会话下启动**根 run**（`base2-free`）。
+3. 任何**子 agent run**（如 `file-picker`、`code-reviewer-*`）必须在 `ancestorRunIds` 中声明根 run，且只能声明根 run。
+
+违反此规则会返回 `free_mode_invalid_agent_hierarchy`。Freebuff2API 会自动处理：每个 token 保活一个根 run 并按周期轮换；子 agent run 在首次使用时惰性创建，且仅以根 run 作为唯一祖先。
+
 ## 部署运行
 
 ### Docker 部署

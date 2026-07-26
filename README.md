@@ -1,49 +1,49 @@
 # Freebuff2API
 
-[English](README.md) | [简体中文](README_zh.md)
+> 中文文档。English version: [README_en.md](README_en.md)
 
-Freebuff2API is a local proxy server that reverse-engineers the [Codebuff Freebuff](https://www.codebuff.com) free tier into **OpenAI-compatible** and **Claude-compatible** API endpoints. Run one Go binary and use Freebuff's free models from any OpenAI/Claude client, SDK, or CLI tool.
+Freebuff2API 是一个本地代理服务器，将 [Codebuff Freebuff](https://www.codebuff.com) 免费层逆向为 **OpenAI 兼容** 与 **Claude 兼容** 的 API 端点。运行一个 Go 二进制，即可在任意 OpenAI/Claude 客户端、SDK 或命令行工具中使用 Freebuff 的免费模型。
 
-> The full reverse-engineering write-up (protocol, pitfalls, architecture) is in **[REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)**.
+> 完整的逆向实录（协议、踩坑、架构）见 **[REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)**。
 
-## Features
+## 核心特性
 
-- **Dual-protocol output** — `POST /v1/chat/completions` (OpenAI, streaming + non-streaming) and `POST /v1/messages` (Claude), works with LobeChat, NextChat, Claude Code, Codex, Cursor, and any OpenAI SDK.
-- **Automatic run hierarchy** — manages the session → root run (`base2-free`) → subagent run tree required by upstream; subagent runs are created lazily with the root as their sole ancestor.
-- **Session keep-alive** — refreshes the freebuff session before expiry, returns `Retry-After` while queued, cools down tokens on 401.
-- **Multi-token rotation** — cycle through multiple auth tokens with periodic rotation and per-token concurrency leases.
-- **Curated model registry** — a hardcoded list of combinations verified end-to-end against the live upstream, supplemented (never shrunk) by a periodic fetch of the upstream `free-agents.ts`.
-- **HTTP proxy support** — route all outbound traffic through a configurable upstream proxy.
+- **双协议出口** — `POST /v1/chat/completions`（OpenAI，流式/非流式）与 `POST /v1/messages`（Claude），支持 LobeChat、NextChat、Claude Code、Codex、Cursor 及任意 OpenAI SDK。
+- **自动 run 层级** — 自动维护上游要求的 会话 → 根 run（`base2-free`）→ 子 agent run 树；子 run 首次使用时惰性创建，且仅以根 run 作为唯一祖先。
+- **会话保活** — freebuff 会话过期前自动刷新，排队时返回 `Retry-After`，遇到 401 自动冷却 token。
+- **多 Token 轮换** — 支持多个 auth token 周期轮换，按 token 分配并发租约。
+- **实测模型注册表** — 内置经端到端实测验证的可用组合硬编码清单，并定期拉取上游 `free-agents.ts` 作为增量补充（只增不减）。
+- **HTTP 代理支持** — 可为所有出站请求配置上游 HTTP 代理。
 
-## Getting Auth Tokens
+## 获取 Auth Token
 
-Freebuff2API requires one or more Freebuff **auth tokens**.
+Freebuff2API 需要至少一个 Freebuff **auth token**。
 
-### Method 1 — Web (Recommended)
+### 方式一 — 网页获取（推荐）
 
-Visit **[https://freebuff.llm.pm](https://freebuff.llm.pm)**, log in with your Freebuff account, and copy the displayed auth token.
+访问 **[https://freebuff.llm.pm](https://freebuff.llm.pm)**，使用 Freebuff 账号登录后，页面会直接显示你的 auth token，复制即可。
 
-### Method 2 — Freebuff CLI
+### 方式二 — Freebuff CLI
 
 ```bash
 npm i -g freebuff
-freebuff   # first launch guides you through login
+freebuff   # 首次启动会引导你完成登录
 ```
 
-After logging in, the token is saved locally:
+登录后，token 会保存到本地凭证文件：
 
-| OS | Credentials Path |
+| 系统 | 凭证文件路径 |
 |---|---|
-| Windows | `C:\Users\<username>\.config\manicode\credentials.json` |
+| Windows | `C:\Users\<用户名>\.config\manicode\credentials.json` |
 | Linux / macOS | `~/.config/manicode/credentials.json` |
 
-Copy the `authToken` value from that file into **AUTH_TOKENS**.
+从该文件中复制 `authToken` 的值，即为所需的 **AUTH_TOKENS**。
 
-> **Tip:** Configure tokens from multiple accounts for higher throughput.
+> **提示：** 可配置多个账号的 token 以提升并发吞吐量。
 
-## Configuration
+## 配置指南
 
-Configuration is via a JSON file and/or environment variables (keys are identical). By default the app reads `config.json` from the working directory; use `-config` to point elsewhere. See `config.example.json`.
+支持 JSON 文件和环境变量两种配置方式（键名一致）。默认读取当前目录的 `config.json`，可用 `-config` 指定其他路径。参考 `config.example.json`。
 
 ```json
 {
@@ -57,73 +57,73 @@ Configuration is via a JSON file and/or environment variables (keys are identica
 }
 ```
 
-| Key / Env Var | Description |
+| 属性 / 环境变量 | 说明 |
 |---|---|
-| `LISTEN_ADDR` | Proxy listen address (default `:8080`) |
-| `UPSTREAM_BASE_URL` | Freebuff backend URL (default `https://codebuff.com`) |
-| `AUTH_TOKENS` | Freebuff auth tokens (JSON array or comma-separated env var) |
-| `ROTATION_INTERVAL` | Run rotation interval (default `6h`) |
-| `REQUEST_TIMEOUT` | Upstream request timeout (default `15m`) |
-| `API_KEYS` | Client API keys for proxy auth (empty = open access) |
-| `HTTP_PROXY` | HTTP proxy for outbound requests |
+| `LISTEN_ADDR` | 代理监听地址（默认 `:8080`） |
+| `UPSTREAM_BASE_URL` | Freebuff 后端地址（默认 `https://codebuff.com`） |
+| `AUTH_TOKENS` | Freebuff auth token（JSON 数组或逗号分隔的环境变量） |
+| `ROTATION_INTERVAL` | Run 自动轮换间隔（默认 `6h`） |
+| `REQUEST_TIMEOUT` | 上游请求超时时间（默认 `15m`） |
+| `API_KEYS` | 客户端鉴权 API Key（留空则无需鉴权） |
+| `HTTP_PROXY` | 上游 HTTP 代理地址 |
 
-Environment variables override JSON values when both are set.
+同时设置时，环境变量优先于 JSON 配置文件。
 
-## Available Models & Upstream Limits
+## 可用模型与上游限制
 
-The usable model list is **not** everything Freebuff advertises — the upstream free tier currently rejects most models at request time. The table below reflects what is **actually accepted**, verified by end-to-end tests against the live upstream (2026-07).
+可用模型列表**并不等于** Freebuff 官方宣传的全部模型——上游免费层目前在请求时会拒绝绝大多数模型。下表为**实际可用**的组合，已对线上游逐一做过端到端实测（2026-07）。
 
-| Model | Status |
+| 模型 | 状态 |
 |---|---|
-| `google/gemini-2.5-flash-lite` | ✅ Working (chat, streaming, Claude protocol) |
-| `google/gemini-3.1-flash-lite-preview` | ✅ Working |
-| `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` | ❌ Rejected (`free_mode_invalid_agent_model`) |
-| `minimax/minimax-m3`, `z-ai/glm-v5.2`, `moonshotai/kimi-k2-thinking` | ❌ Rejected |
-| `xiaomi/mimo-v2.5-flash/pro`, `hy3/hy3*`, `poolside/laguna-s-2-1*` | ❌ Rejected |
+| `google/gemini-2.5-flash-lite` | ✅ 可用（聊天、流式、Claude 协议均验证通过） |
+| `google/gemini-3.1-flash-lite-preview` | ✅ 可用 |
+| `deepseek/deepseek-v4-pro`、`deepseek/deepseek-v4-flash` | ❌ 上游拒绝（`free_mode_invalid_agent_model`） |
+| `minimax/minimax-m3`、`z-ai/glm-v5.2`、`moonshotai/kimi-k2-thinking` | ❌ 上游拒绝 |
+| `xiaomi/mimo-v2.5-flash/pro`、`hy3/hy3*`、`poolside/laguna-s-2-1*` | ❌ 上游拒绝 |
 
-**Why the gap:** Codebuff tightened enforcement on the free tier. Their open-source `free-agents.ts` still lists many models, but the backend now only honors specific agent+model combinations; non-Gemini models return:
+**为什么会有出入：** Codebuff 免费层收紧了校验。他们开源仓库里的 `free-agents.ts` 仍然列着很多模型，但后端现在只认特定的 agent + model 组合，非 Gemini 模型一律返回：
 
 ```json
 {"error":"free_mode_invalid_agent_model","message":"Free mode is only available for specific agent and model combinations."}
 ```
 
-The model registry therefore ships a curated hardcoded list (in `models.go`) as the authoritative baseline. It still fetches upstream `free-agents.ts` periodically as a supplement, so upstream source refactors (e.g. the switch to `FREEBUFF_*_MODEL_ID` constant references that a regex cannot resolve) never shrink the available list.
+因此模型注册表内置了一份经实测筛选的硬编码清单（见 `models.go`）作为权威底座，仍会定期拉取上游 `free-agents.ts` 作为补充——即使上游源码重构（例如改用 `FREEBUFF_*_MODEL_ID` 常量引用，正则无法解析）也不会让可用列表缩水。
 
-### Run Hierarchy (why it matters)
+### Run 层级（为什么重要）
 
-Freebuff enforces a session-rooted run tree:
+Freebuff 强制要求以会话为根的 run 树：
 
-1. A **session** must exist (`POST /api/v1/freebuff/session`).
-2. A **root run** (`base2-free`) must be started under it.
-3. Any **subagent run** (e.g. `file-picker`, `code-reviewer-*`) must declare the root run in `ancestorRunIds` — and only the root.
+1. 必须先建立**会话**（`POST /api/v1/freebuff/session`）。
+2. 必须在会话下启动**根 run**（`base2-free`）。
+3. 任何**子 agent run**（如 `file-picker`、`code-reviewer-*`）必须在 `ancestorRunIds` 中声明根 run，且只能声明根 run。
 
-Violating this returns `free_mode_invalid_agent_hierarchy`. Freebuff2API handles it automatically: one root run per token is kept alive and rotated on schedule; subagent runs are created lazily on first use with the root as their sole ancestor.
+违反此规则会返回 `free_mode_invalid_agent_hierarchy`。Freebuff2API 会自动处理：每个 token 保活一个根 run 并按周期轮换；子 agent run 在首次使用时惰性创建，且仅以根 run 作为唯一祖先。
 
-## Usage
+## 使用示例
 
 ```bash
-# OpenAI
+# OpenAI 协议
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"google/gemini-2.5-flash-lite","messages":[{"role":"user","content":"你好"}]}'
 
-# Claude
+# Claude 协议
 curl http://localhost:8080/v1/messages \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{"model":"google/gemini-2.5-flash-lite","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
 
-# Model list
+# 模型列表
 curl http://localhost:8080/v1/models
 ```
 
-Point any OpenAI SDK at `http://localhost:8080/v1`, or set `ANTHROPIC_BASE_URL=http://localhost:8080` for Claude Code.
+将任意 OpenAI SDK 的 base_url 指向 `http://localhost:8080/v1`，或为 Claude Code 设置 `ANTHROPIC_BASE_URL=http://localhost:8080` 即可。
 
-## Deployment
+## 部署运行
 
-### Build from Source
+### 源码编译
 
-**Requirements:** Go 1.23+
+**环境要求：** Go 1.23+
 
 ```bash
 git clone https://github.com/lza6/Freebuff-2API.git
@@ -132,29 +132,29 @@ go build -o freebuff2api .
 ./freebuff2api -config config.json
 ```
 
-### Docker
+### Docker 部署
 
 ```bash
 docker build -t freebuff2api .
 docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" freebuff2api
 ```
 
-> A GitHub Actions workflow (`.github/workflows/docker.yml`) builds multi-arch images on push. Update the `IMAGE_NAME` env var there to your own GHCR namespace before relying on published images.
+> 仓库自带 GitHub Actions 工作流（`.github/workflows/docker.yml`），推送时会构建多架构镜像。如需发布到自己的 GHCR，请先修改其中的 `IMAGE_NAME` 环境变量为你的命名空间。
 
-## Cloudflare Worker (experimental, currently blocked)
+## Cloudflare Worker（实验性，暂不可用）
 
-The `cfworker/` directory contains a Cloudflare Worker port. It is **currently non-functional against the live upstream**: Codebuff rejects Worker-originated requests with `free_mode_cli_required`, a TLS-fingerprint-level check (Client Hello / JA3) that cannot be bypassed by changing HTTP headers. The local Go binary's native TLS stack passes. Use the Go server; `cfworker/` is kept for research only.
+`cfworker/` 目录为 Cloudflare Worker 移植版，**目前对线上游不可用**：Codebuff 会以 `free_mode_cli_required` 拒绝来自 Worker 的请求，这是 TLS 指纹层（Client Hello / JA3）的检测，无法通过修改 HTTP 头绕过。本地 Go 二进制的原生 TLS 栈可通过。请使用 Go 服务端，`cfworker/` 仅供研究参考。
 
-## Links
+## 友情链接
 
 - [linux.do](https://linux.do)
 
-## Disclaimer
+## 免责声明
 
-This project has no official affiliation with OpenAI, Codebuff, or Freebuff. All related trademarks and copyrights belong to their respective owners.
+本项目与 OpenAI、Codebuff 或 Freebuff 无任何官方关联，相关商标和版权均归其各自所有者所有。
 
-All contents within this repository are provided solely for communication, experimentation, and learning, and do not constitute production-ready services or professional advice. This project is provided on an "As-Is" basis, and users must use it at their own risk. The author assumes no liability for any direct or indirect damages resulting from the use, modification, or distribution of this project, nor provides any warranties of any kind, express or implied.
+本仓库的所有内容仅供交流、实验和学习使用，不构成任何生产环境服务或专业建议。本项目按"原样（As-Is）"提供，使用者需自行承担使用风险。作者不对因使用、修改或分发本项目而导致的任何直接或间接损失承担责任，亦不提供任何形式的明示或暗示保证。
 
-## License
+## 开源协议
 
 MIT

@@ -37,10 +37,11 @@ func NewUpstreamClient(cfg Config) *UpstreamClient {
 	}
 }
 
-func (c *UpstreamClient) StartRun(ctx context.Context, authToken, agentID string) (string, error) {
+func (c *UpstreamClient) StartRun(ctx context.Context, authToken, agentID string, ancestorRunIds ...string) (string, error) {
 	payload := map[string]any{
-		"action":  "START",
-		"agentId": agentID,
+		"action":         "START",
+		"agentId":        agentID,
+		"ancestorRunIds": ancestorRunIds,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

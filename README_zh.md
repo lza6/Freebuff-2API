@@ -116,34 +116,29 @@ Freebuff 强制要求以会话为根的 run 层级结构：
 
 ## 部署运行
 
-### Docker 部署
-
-预构建多架构镜像已发布至 GHCR：
-
-```bash
-docker run -d --name Freebuff2API \
-  -p 8080:8080 \
-  -e AUTH_TOKENS="token1,token2" \
-  ghcr.io/quorinex/freebuff2api:latest
-```
-
-手动构建：
-
-```bash
-docker build -t Freebuff2API .
-docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" Freebuff2API
-```
-
 ### 源码编译
 
 **环境要求：** Go 1.23+
 
 ```bash
-git clone https://github.com/Quorinex/Freebuff2API.git
-cd Freebuff2API
-go build -o Freebuff2API .
-./Freebuff2API -config config.json
+git clone https://github.com/lza6/Freebuff-2API.git
+cd Freebuff-2API
+go build -o freebuff2api .
+./freebuff2api -config config.json
 ```
+
+### Docker 部署
+
+```bash
+docker build -t freebuff2api .
+docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" freebuff2api
+```
+
+> 仓库自带 GitHub Actions 工作流（`.github/workflows/docker.yml`），推送时会构建多架构镜像。如需发布到自己的 GHCR，请先修改其中的 `IMAGE_NAME` 环境变量为你的命名空间。
+
+## Cloudflare Worker（实验性，暂不可用）
+
+`cfworker/` 目录为 Cloudflare Worker 移植版，**目前对线上游不可用**：Codebuff 会以 `free_mode_cli_required` 拒绝来自 Worker 的请求，这是 TLS 指纹层（Client Hello / JA3）的检测，无法通过修改 HTTP 头绕过。本地 Go 二进制的原生 TLS 栈可通过。请使用 Go 服务端，`cfworker/` 仅供研究参考。
 
 ## 友情链接
 

@@ -95,11 +95,14 @@ impl StartRunResponse {
 
 impl UpstreamClient {
     pub fn new(base_url: String, proxy: Option<String>, timeout: Duration) -> Result<Self> {
+        // 流式响应不受整体 timeout 影响：reqwest 的 .timeout() 是「总请求」超时，对流式会截断
+        // 所以用 read_timeout 代替：单次读块超时=长超时，但流可以持续很久（有几 K 大文档时）
+        let read_timeout = timeout.max(Duration::from_secs(900)); // 至少 15min，长文档够用
         let mut builder = reqwest::Client::builder()
-            .timeout(timeout)
-            .user_agent(DESKTOP_UA)
+            .read_timeout(Duration::from_secs(300)) // 单次读块 5min 无数据才断（流式增量不断）
             .connect_timeout(Duration::from_secs(15))
             .pool_idle_timeout(Duration::from_secs(90));
+        let _ = read_timeout;
         if let Some(p) = &proxy {
             builder = builder.proxy(reqwest::Proxy::all(p)?);
         }
@@ -110,7 +113,7 @@ impl UpstreamClient {
         } else {
             base_url.trim_end_matches('/').to_string()
         };
-        Ok(Self { base_url, http, proxy, timeout })
+        Ok(Self { base_url, http, proxy, timeout: read_timeout })
     }
 
     fn auth_headers(&self, token: &str) -> HeaderMap {

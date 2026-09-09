@@ -58,6 +58,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tokens", get(handle_tokens_list))
         .route("/api/account/balance", get(handle_account_balance))
         .route("/api/account/detail", axum::routing::post(handle_account_detail))
+        .route("/v1/web/chat", axum::routing::post(handle_web_chat))
         .merge(api)
         .with_state(state)
 }
@@ -206,6 +207,61 @@ fn load_imported_token() -> Option<String> {
 fn internal_err(e: &anyhow::Error) -> Response {
     tracing::error!("用量统计查询失败: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+}
+
+/// web 版完整对话代理（Cookie 鉴权 chat/stream → 真实增量 SSE 透传 → OpenAI 兼容）
+/// POST /v1/web/chat — body: { model, content, thread_id?, images? }
+async fn handle_web_chat(State(_st): State<AppState>, body: axum::body::Bytes) -> Response {
+    let cookie = load_imported_token().filter(|t| t.contains("session-token"));
+    let cookie = match cookie {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": { "message": "未导入 web Cookie 凭证。请 POST /api/tokens/import 粘贴 Cookie", "type": "invalid_request_error" } })),
+            )
+                .into_response();
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": { "message": "invalid json", "type": "invalid_request_error" } })),
+            )
+                .into_response();
+        }
+    };
+    let model = parsed.get("model").and_then(|m| m.as_str()).unwrap_or("glm-5.3-flash").to_string();
+    let content = parsed.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+    let thread_id = parsed.get("thread_id").and_then(|t| t.as_str()).map(|s| s.to_string());
+    let reasoning_effort = parsed.get("reasoning_effort").and_then(|r| r.as_str());
+    if content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": { "message": "content is required", "type": "invalid_request_error" } })),
+        )
+            .into_response();
+    }
+
+    let client = match crate::web_protocol::WebClient::new(cookie, model) {
+        Ok(c) => c,
+        Err(e) => return internal_err(&anyhow::Error::msg(e.to_string())),
+    };
+    // 真实增量流：上游 chat/stream SSE 逐事件实时转发为 OpenAI chunk
+    match client.chat_stream_raw(thread_id.as_deref(), &content, reasoning_effort, vec![], vec![]).await {
+        Ok(body) => {
+            Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("cache-control", "no-cache")
+                .header("connection", "keep-alive")
+                .header("x-accel-buffering", "no")
+                .body(body)
+                .unwrap()
+        }
+        Err(e) => internal_err(&e),
+    }
 }
 
 async fn handle_usage_models(State(st): State<AppState>) -> impl IntoResponse {
@@ -527,12 +583,31 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         st.pool.update_score(&account_name, -20.0).await;
     }
 
-    // 流式转发上游响应
+    // 流式转发上游响应（真实增量透传 + 上游错误原样透传）
     let mut builder = Response::builder().status(status);
     for (k, v) in upstream_resp.headers() {
         if k != "content-length" && k != "transfer-encoding" {
             builder = builder.header(k, v);
         }
+    }
+    // 非 2xx：透传上游真实错误体（含 message/type/code）
+    if !status.is_success() {
+        let err_body = upstream_resp.bytes().await.unwrap_or_default();
+        let err_text = String::from_utf8_lossy(&err_body).to_string();
+        tracing::warn!("[上游错误] {model} HTTP {status}: {}", err_text.chars().take(500).collect::<String>());
+        return (
+            status,
+            Json(serde_json::json!({
+                "error": {
+                    "message": err_text,
+                    "type": "upstream_error",
+                    "code": status.as_u16(),
+                    "model": model,
+                    "upstream": st.client.base_url(),
+                }
+            })),
+        )
+            .into_response();
     }
     builder
         .body(Body::from_stream(upstream_resp.bytes_stream()))

@@ -204,7 +204,100 @@ impl WebClient {
         h
     }
 
-    /// web 聊天流（SSE）。返回逐 event 回调。model 用短名。
+    /// web 聊天流（SSE，真实增量透传）。返回逐事件 body stream。
+    /// 每个上游 data: 事件实时转换为 OpenAI chunk 输出，不聚合不缓冲。
+    pub async fn chat_stream_raw(
+        &self,
+        thread_id: Option<&str>,
+        content: &str,
+        reasoning_effort: Option<&str>,
+        images: Vec<WebImage>,
+        attachments: Vec<WebAttachment>,
+    ) -> Result<axum::body::Body> {
+        use futures::StreamExt;
+        let body = serde_json::json!({
+            "threadId": thread_id,
+            "content": content,
+            "model": self.model,
+            "reasoningEffort": reasoning_effort,
+            "gravity": GravityContext::default(),
+            "images": images,
+            "attachments": attachments,
+        });
+        let url = format!("{WEB_HOST}/api/chat/stream");
+        let resp = self.http.post(&url).headers(self.headers(true)).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("web chat HTTP {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+        }
+
+        let byte_stream = resp.bytes_stream();
+        let sse_buf: Vec<u8> = Vec::new();
+        let stream = futures::stream::unfold((byte_stream, sse_buf), |(mut stream, mut buf)| async move {
+            loop {
+                match stream.next().await {
+                    Some(Ok(chunk)) => {
+                        buf.extend_from_slice(&chunk);
+                        // 切出完整事件行（空行分隔）
+                        while let Some(pos) = find_double_newline(&buf) {
+                            let event_bytes: Vec<u8> = buf.drain(..pos).collect();
+                            let line_str = String::from_utf8_lossy(&event_bytes);
+                            let mut out_line = String::new();
+                            let mut text_parts: Vec<String> = Vec::new();
+                            let mut reasoning_parts: Vec<String> = Vec::new();
+                            let mut tool_parts: Vec<serde_json::Value> = Vec::new();
+                            let mut model_name: Option<String> = None;
+                            for line in line_str.lines() {
+                                let line = line.trim();
+                                if let Some(json) = line.strip_prefix("data:") {
+                                    let json = json.trim();
+                                    if json.is_empty() || json == "[DONE]" { continue; }
+                                    if let Ok(event) = serde_json::from_str::<ChatEvent>(json) {
+                                        match &event {
+                                            ChatEvent::Delta { text } => text_parts.push(text.clone()),
+                                            ChatEvent::ReasoningDelta { text } => reasoning_parts.push(text.clone()),
+                                            ChatEvent::AgentTool { tool_name: Some(name), tool_call_id, label, .. } => {
+                                                tool_parts.push(serde_json::json!({ "index": 0, "id": tool_call_id.as_deref().unwrap_or(""), "type": "function", "function": { "name": name, "arguments": "{}" } }));
+                                                let _ = label;
+                                            }
+                                            ChatEvent::Done => {
+                                                out_line += "data: [DONE]\n\n";
+                                            }
+                                            ChatEvent::Meta { model, .. } => model_name = model.clone(),
+                                            ChatEvent::Title { .. } => {}
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            // 逐事件转 OpenAI chunk（真实增量，立即 flush）
+                            for r in reasoning_parts {
+                                out_line += &format!("data: {}\n\n", serde_json::json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": { "reasoning_content": r }, "finish_reason": null }] }));
+                            }
+                            for t in text_parts {
+                                out_line += &format!("data: {}\n\n", serde_json::json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": { "content": t }, "finish_reason": null }] }));
+                            }
+                            for tc in &tool_parts {
+                                out_line += &format!("data: {}\n\n", serde_json::json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": { "tool_calls": [tc] }, "finish_reason": null }] }));
+                            }
+                            let _ = model_name;
+                            if !out_line.is_empty() {
+                                return Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(out_line)), (stream, buf)));
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Some((Err::<_, std::io::Error>(std::io::Error::other(e.to_string())), (stream, buf)));
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+            }
+        });
+        Ok(axum::body::Body::from_stream(stream))
+    }
+
+    /// web 聊天流（SSE 聚合版，一次性返回全文）
     pub async fn chat_stream(
         &self,
         thread_id: Option<&str>,

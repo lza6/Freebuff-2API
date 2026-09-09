@@ -129,6 +129,24 @@ async function refresh(){
     // models
     const mb=document.getElementById('models'); mb.innerHTML='';
     (models||[]).forEach(m=>mb.append(Object.assign(el('span','chip'),{textContent:m})));
+    // 账号余额
+    fetch('/api/account/balance').then(r=>r.json()).then(bal=>{
+      if(bal && bal.ok!==false){
+        const bc=document.createElement('div'); bc.className='panel'; bc.style.marginTop='24px';
+        bc.innerHTML='<h2>📊 账号积分（web Cookie）</h2>';
+        let html=`<p style="color:var(--muted);font-size:13px">套餐: <b>${bal.subscription?.tierId||'免费'}</b> · 层级: ${bal.access_tier||'—'} ${bal.country_block_reason?`· ⚠️ 地区受限(${bal.country_block_reason})`:''}</p>`;
+        if(bal.freebucks){ const d=bal.freebucks.daily||{}; html+=`<p style="color:var(--muted);font-size:13px">今日积分: <b style="color:var(--ok)">${d.remaining??'—'} / ${d.limit??'—'}</b>（已用 ${d.spent??0}）· 重置 ${new Date(d.resetAt).toLocaleString('zh-CN',{hour12:false})}</p>`; }
+        html+='<table><thead><tr><th>模型</th><th>积分价</th><th>今日剩余</th></tr></thead><tbody>';
+        if(bal.model_remaining){ for(const [m,v] of Object.entries(bal.model_remaining)){
+          const usable = v.usable_today===-1?'不限':v.usable_today;
+          const price = v.price===0?'<b style="color:var(--ok)">免费</b>':v.price;
+          html+=`<tr><td>${m}</td><td>${price}</td><td>${usable}</td></tr>`;
+        }}
+        html+='</tbody></table>';
+        bc.innerHTML+=html;
+        document.querySelector('.grid').after(bc);
+      }
+    }).catch(()=>{});
   }catch(e){ toast('加载失败: '+e.message); }
 }
 refresh();

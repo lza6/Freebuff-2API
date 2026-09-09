@@ -111,6 +111,7 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开控制台', click: () => { if (!mainWindow) createWindow(); else mainWindow.show(); } },
     { label: '➕ 一键登录新账号', click: openLoginWindow },
+    { label: '🔄 检查更新', click: () => { checkForUpdates(); } },
     { label: '健康检查', click: async () => { await checkHealth(); } },
     { type: 'separator' },
     { label: '退出', click: () => { app.isQuitting = true; if (gateway) gateway.kill(); app.quit(); } },
@@ -193,7 +194,45 @@ app.on('ready', async () => {
   // 主窗口 IPC：面板点「一键登录」→ 打开登录窗口
   ipcMain.handle('open-login', () => openLoginWindow());
   ipcMain.handle('capture-cookie', async () => await captureCookies());
+
+  // 检查更新（electron-updater，仅打包版）
+  setupUpdater();
 });
+
+// ---------- 自动更新 ----------
+let updater = null;
+function setupUpdater() {
+  if (!app.isPackaged) return; // 开发模式跳过
+  try {
+    const { autoUpdater } = require('electron-updater');
+    updater = autoUpdater;
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: 'https://github.com/lza6/Freebuff-2API/releases/latest/download/',
+    });
+    autoUpdater.on('update-available', () => {
+      // 有更新提示托盘
+      tray.setToolTip('Freebuff2API — 有新版本可用！点击「检查更新」');
+      tray.displayBalloon({ title: 'Freebuff2API 更新可用', content: '有新版本，请从托盘菜单下载' });
+    });
+    autoUpdater.on('error', (e) => console.error('[updater]', e.message));
+    autoUpdater.checkForUpdates().catch(() => {});
+  } catch (e) {
+    console.error('[updater] 初始化失败', e.message);
+  }
+}
+
+function checkForUpdates() {
+  if (!updater) { setupUpdater(); }
+  if (updater) updater.checkForUpdates().catch(() => {});
+}
+
+// 托盘菜单加「检查更新」
+const origCreateTray = createTray;
+// 手动补：在托盘加更新项（在 createTray 定义后覆盖）
+
 
 app.on('window-all-closed', (e) => {
   // 托盘常驻：仅隐藏不退出

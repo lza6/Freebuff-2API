@@ -1,0 +1,9 @@
+{
+  "listen_addr": "127.0.0.1:8788",
+  "upstream_base_url": "https://www.codebuff.com",
+  "auth_tokens": ["__TEST_SKIP__"],
+  "api_keys": [],
+  "http_proxy": "http://127.0.0.1:10808",
+  "sqlite_path": "data/freebuff2api2.sqlite",
+  "skip_upstream_check": true
+}

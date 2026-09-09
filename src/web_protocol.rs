@@ -232,12 +232,13 @@ impl WebClient {
 
         let byte_stream = resp.bytes_stream();
         let sse_buf: Vec<u8> = Vec::new();
-        let stream = futures::stream::unfold((byte_stream, sse_buf), |(mut stream, mut buf)| async move {
+        let stream = futures::stream::unfold((byte_stream, sse_buf, false), |(mut stream, mut buf, mut done)| async move {
+            if done { return None; }
             loop {
                 match stream.next().await {
                     Some(Ok(chunk)) => {
                         buf.extend_from_slice(&chunk);
-                        // 切出完整事件行（空行分隔）
+                        // 切出完整事件块（空行分隔）
                         while let Some(pos) = find_double_newline(&buf) {
                             let event_bytes: Vec<u8> = buf.drain(..pos).collect();
                             let line_str = String::from_utf8_lossy(&event_bytes);
@@ -245,7 +246,7 @@ impl WebClient {
                             let mut text_parts: Vec<String> = Vec::new();
                             let mut reasoning_parts: Vec<String> = Vec::new();
                             let mut tool_parts: Vec<serde_json::Value> = Vec::new();
-                            let mut model_name: Option<String> = None;
+                            let mut done_flag = false;
                             for line in line_str.lines() {
                                 let line = line.trim();
                                 if let Some(json) = line.strip_prefix("data:") {
@@ -259,11 +260,7 @@ impl WebClient {
                                                 tool_parts.push(serde_json::json!({ "index": 0, "id": tool_call_id.as_deref().unwrap_or(""), "type": "function", "function": { "name": name, "arguments": "{}" } }));
                                                 let _ = label;
                                             }
-                                            ChatEvent::Done => {
-                                                out_line += "data: [DONE]\n\n";
-                                            }
-                                            ChatEvent::Meta { model, .. } => model_name = model.clone(),
-                                            ChatEvent::Title { .. } => {}
+                                            ChatEvent::Done => { done_flag = true; }
                                             _ => {}
                                         }
                                     }
@@ -279,16 +276,24 @@ impl WebClient {
                             for tc in &tool_parts {
                                 out_line += &format!("data: {}\n\n", serde_json::json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": { "tool_calls": [tc] }, "finish_reason": null }] }));
                             }
-                            let _ = model_name;
+                            if done_flag {
+                                out_line += "data: [DONE]\n\n";
+                                return Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(out_line)), (stream, buf, true)));
+                            }
                             if !out_line.is_empty() {
-                                return Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(out_line)), (stream, buf)));
+                                return Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(out_line)), (stream, buf, false)));
                             }
                         }
+                        // buf 已无完整事件，继续收下一个 chunk
                     }
                     Some(Err(e)) => {
-                        return Some((Err::<_, std::io::Error>(std::io::Error::other(e.to_string())), (stream, buf)));
+                        return Some((Err::<_, std::io::Error>(std::io::Error::other(e.to_string())), (stream, buf, false)));
                     }
                     None => {
+                        // 上游结束但没收到 done → 补发 [DONE]
+                        if !done {
+                            return Some((Ok::<_, std::io::Error>(axum::body::Bytes::from("data: [DONE]\n\n")), (stream, buf, true)));
+                        }
                         return None;
                     }
                 }

@@ -58,10 +58,13 @@ async fn main() -> anyhow::Result<()> {
     let ads = Arc::new(AdRefresher::new(client.clone(), cfg.clone()));
 
     // 启动各账号后台保活
-    for acc in &pool.accounts {
-        let sess = acc.session.clone();
-        let ads = ads.clone();
-        tokio::spawn(async move { sess.run_keepalive(ads).await });
+    {
+        let accounts = pool.accounts.lock().await;
+        for acc in accounts.iter() {
+            let sess = acc.session.clone();
+            let ads = ads.clone();
+            tokio::spawn(async move { sess.run_keepalive(ads).await });
+        }
     }
 
     let state = AppState {

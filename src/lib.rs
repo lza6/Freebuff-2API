@@ -15,6 +15,7 @@
 pub mod ads;
 pub mod api;
 pub mod config;
+pub mod import;
 pub mod models;
 pub mod pool;
 pub mod router;

@@ -15,7 +15,6 @@ use crate::router::ModelRouter;
 
 use crate::upstream::UpstreamClient;
 use crate::usage::UsageDb;
-use anyhow::Result;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -24,6 +23,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use std::sync::Arc;
 
+/// 统一 AppState（必须 Send+Sync+Clone 才能被 axum State 提取器使用）
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
@@ -35,6 +35,9 @@ pub struct AppState {
     pub ads: Arc<AdRefresher>,
     pub started: std::time::Instant,
 }
+
+// axum_core 已对 `S: Clone` 提供 blanket impl FromRef<S> for S，此处无需手动实现。
+// 保留 FromRef 导入供后续扩展（若需要子状态 FromRef 时使用）。
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -51,6 +54,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/models", get(handle_v1_models))
         .route("/v1/chat/completions", axum::routing::post(handle_chat_completions))
         .route("/v1/messages", axum::routing::post(handle_claude_messages))
+        .route("/api/tokens/import", axum::routing::post(handle_token_import))
+        .route("/api/tokens", get(handle_tokens_list))
         .merge(api)
         .with_state(state)
 }
@@ -64,7 +69,7 @@ async fn handle_dashboard() -> impl IntoResponse {
         .unwrap()
 }
 
-async fn handle_healthz(State(st): State<AppState>) -> impl IntoResponse {
+async fn handle_healthz(State(st): State<AppState>) -> Response {
     let dur = st.started.elapsed();
     let json = serde_json::json!({
         "ok": true,
@@ -74,7 +79,7 @@ async fn handle_healthz(State(st): State<AppState>) -> impl IntoResponse {
         "model_count": st.registry.snapshot().await.model_count,
         "ads": st.ads.snapshot().await,
     });
-    Json(json)
+    Json(json).into_response()
 }
 
 async fn handle_v1_models(State(st): State<AppState>) -> impl IntoResponse {
@@ -128,13 +133,121 @@ async fn handle_usage_models(State(st): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!(st.registry.models().await))
 }
 
-async fn handle_accounts(State(st): State<AppState>) -> impl IntoResponse {
-    Json(st.pool.snapshot().await)
+async fn handle_accounts(State(st): State<AppState>) -> Response {
+    Json(st.pool.snapshot().await).into_response()
+}
+
+// ---------- Token 导入（curl / HAR 自动解析入库） ----------
+
+/// POST /api/tokens/import — body 传 curl 命令文本或 HAR JSON，自动提取 Bearer token 入库
+async fn handle_token_import(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+    let text = match std::str::from_utf8(&body) {
+        Ok(t) => t,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "message": "输入不是合法 UTF-8 文本" })),
+            )
+                .into_response();
+        }
+    };
+    let tokens = match crate::import::sniff_tokens(text) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "message": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let tokens_path = "data/tokens.json";
+    match crate::import::persist_tokens(tokens_path, &tokens) {
+        Ok(added) => {
+            if added.is_empty() {
+                return Json(serde_json::json!({ "ok": true, "added": 0, "message": "token 已存在，未重复添加" }))
+                    .into_response();
+            }
+            // 热更新到账号池
+            let new_accounts: Vec<crate::pool::AccountEntry> = added
+                .iter()
+                .map(|t| {
+                    crate::pool::AccountEntry {
+                        name: format!("import-{}", t.token.chars().take(6).collect::<String>()),
+                        token: t.token.clone(),
+                        session: std::sync::Arc::new(crate::session::SessionManager::new(
+                            st.client.clone(),
+                            t.token.clone(),
+                            (*st.cfg).clone(),
+                        )),
+                        score: tokio::sync::RwLock::new(0.0),
+                        cooldown_until: tokio::sync::RwLock::new(None),
+                    }
+                })
+                .collect();
+            let mut _added_count: usize = 0;
+            for acc in new_accounts {
+                let added_flag = st.pool.add_account(acc).await;
+                if added_flag {
+                    _added_count += 1;
+                }
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "added": added.len(),
+                "tokens": added.iter().map(|t| serde_json::json!({
+                    "token_masked": mask(&t.token),
+                    "host": t.host,
+                    "method": t.method,
+                    "path": t.path,
+                })).collect::<Vec<_>>(),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "message": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/tokens — 列出已入库 token（脱敏）
+async fn handle_tokens_list(State(st): State<AppState>) -> Response {
+    let _ = &st;
+    match crate::import::load_tokens("data/tokens.json") {
+        Ok(tokens) => Json(serde_json::json!({
+            "ok": true,
+            "tokens": tokens.iter().map(|t| serde_json::json!({
+                "token_masked": mask(&t.token),
+                "source": t.source,
+                "host": t.host,
+                "path": t.path,
+                "method": t.method,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "message": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// 脱敏：只显示前 6 + 后 4
+fn mask(token: &str) -> String {
+    if token.len() <= 12 {
+        return format!("{}***", &token[..token.len().saturating_sub(3).max(1)]);
+    }
+    let head = &token[..6];
+    let tail = &token[token.len() - 4..];
+    format!("{head}...{tail}")
 }
 
 // ---------- OpenAI 兼容 ----------
 
-async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
+async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let start = std::time::Instant::now();
     // 解析请求
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
@@ -189,6 +302,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         Err(e) => {
             let msg = e.to_string();
             if msg.starts_with("waiting_room_queued") {
+                st.usage.record(&account_name, &model, 0, 0, 0, 429, "", "").ok();
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({ "error": { "message": msg, "type": "server_error", "code": "waiting_room_queued" } })),
@@ -198,6 +312,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
             st.pool
                 .update_score(&account_name, -30.0)
                 .await;
+            st.usage.record(&account_name, &model, 0, 0, 0, 502, "", "").ok();
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": { "message": format!("failed to acquire free session: {msg}"), "type": "server_error" } })),
@@ -210,6 +325,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     let run_id = match ensure_root_run(&st, &account_name, &token).await {
         Ok(id) => id,
         Err(e) => {
+            st.usage.record(&account_name, &model, 0, 0, 0, 502, "", "").ok();
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": { "message": format!("create run failed: {e}"), "type": "server_error" } })),
@@ -281,7 +397,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         .into_response()
 }
 
-async fn ensure_root_run(st: &AppState, account_name: &str, token: &str) -> Result<String> {
+async fn ensure_root_run(st: &AppState, account_name: &str, token: &str) -> anyhow::Result<String> {
     // 简化：每个账号惰性建根 run 并缓存（进程内 Arc<Mutex> 缓存方案由后续打补）
     // 此处直接新建根 run，避免首次建 run 的复杂度
     let run_id = st
@@ -294,7 +410,7 @@ async fn ensure_root_run(st: &AppState, account_name: &str, token: &str) -> Resu
 
 // ---------- Anthropic 兼容 ----------
 
-async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
+async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {

@@ -1,0 +1,161 @@
+<!doctype html>
+<meta charset="utf-8" />
+<!-- No remote anything: this page is the approval surface, so it may not load, connect to, or be
+     framed by anything off its own file:// origin. -->
+<meta
+  http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'"
+/>
+<title>Freebuff</title>
+<style>
+  :root {
+    --bg: #0c0d0f; --fg: #e8e8ea; --muted: #9a9aa0; --border: #26262b;
+    --panel: #141417; --warn: #e0a54a; --btn: #1e1e23; --btn-fg: #e8e8ea;
+    --save: #7cff3f; --save-fg: #0c0d0f;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f3f4; --fg: #1a1a1c; --muted: #63636b; --border: #d7d7dc;
+      --panel: #fff; --btn: #e9e9eb; --btn-fg: #1a1a1c; --save-fg: #0c0d0f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  html.measure, html.measure body { height: auto; }
+  body {
+    background: var(--bg); color: var(--fg);
+    /* the foot stays at the bottom whatever the spec's height */
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; padding: 20px 22px; gap: 12px;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+  h1 .mark { color: var(--warn); font-size: 15px; }
+  p { margin: 0; color: var(--muted); }
+  /* The spec is the thing being consented to, so it is monospaced, selectable, and never wrapped
+     into something that reads differently from what will run. */
+  pre {
+    /* Sized to the spec, not to the window: a four-line command in a box stretched to fill 400px
+       reads as though something is missing. Long argv scrolls instead of pushing the buttons off. */
+    margin: 0; flex: 0 1 auto; max-height: 210px; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
+    padding: 11px 13px; font: 11.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre; -webkit-user-select: text; user-select: text;
+  }
+  /* Sponsored consent keeps the short product-owned sentence above the exact prepared task and
+     local scope. The advertiser name stays isolated as text inside our sentence. */
+  .sentence { display: none; font-size: 15px; line-height: 1.5; color: var(--fg); margin: 0; }
+  /* The name is attacker-controlled input. It may wrap, it may scroll, it may never grow the
+     window past what main allows or move the buttons: the box clips, the foot does not. */
+  .sentence .who { font-weight: 600; overflow-wrap: anywhere; }
+  .sentence .refuse { color: var(--warn); }
+  body.is-sponsored h1, body.is-sponsored #message, body.is-sponsored #detail { display: none; }
+  body.is-sponsored .sentence { display: block; flex: 0 1 auto; min-height: 0; overflow: auto; }
+  body.is-sponsored #spec { display: block; }
+  .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 4px; }
+  button {
+    font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--btn); color: var(--btn-fg); cursor: pointer;
+  }
+  button:hover { filter: brightness(1.15); }
+  button.go { background: var(--save); color: var(--save-fg); border-color: transparent; }
+  button:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+</style>
+
+<h1><span class="mark">▲</span> <span id="title">Approve this connector?</span></h1>
+<p id="message"></p>
+<pre id="spec"></pre>
+<p id="detail"></p>
+<p class="sentence" id="sentence"><span class="who" id="who"></span><span id="rest"></span></p>
+<div class="foot">
+  <button id="no" type="button">Cancel</button>
+  <button id="yes" type="button" class="go">Approve</button>
+</div>
+
+<script>
+  // Everything below is written as TEXT. The command, the url and the server name all come from a
+  // config file a human may have pasted from the internet, so none of it is allowed to be markup.
+  const el = (id) => document.getElementById(id)
+
+  const ESCAPES = { '\n': '\\n', '\r': '\\r', '\t': '\\t' }
+  const UNSAFE_DISPLAY =
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u2028\u2029\ufeff]/g
+  const MAX_NAME_CHARS = 80
+  const clampName = (value) => {
+    const text = String(value ?? '')
+      .replace(
+        UNSAFE_DISPLAY,
+        (c) => ESCAPES[c] ?? '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+      )
+      .trim()
+    return text.length > MAX_NAME_CHARS ? text.slice(0, MAX_NAME_CHARS) + '\u2026' : text
+  }
+
+  window.consent.ready((options) => {
+    const [no, go] = options.buttons || ['Cancel', 'Approve']
+    el('no').textContent = no
+    // Two layouts share this window and nothing else: a connector's argv, cwd and env ARE the
+    // decision and need the field list; a sponsored task shows its short sentence plus the exact
+    // prepared procedure and local scope. The flag decides, and only this layout is opt-in.
+    const sponsored =
+      options.sponsored && typeof options.sponsored === 'object' ? options.sponsored : null
+    document.body.classList.toggle('is-sponsored', Boolean(sponsored))
+    // Yes is the green button on both paths (Owen, 2026-09-03: "yes green"). Decline stays as
+    // reachable — same size, keyboard-equal, and focus starts on No — it is just not the coloured one.
+    el('yes').classList.add('go')
+    if (sponsored) {
+      // The advertiser's name is set as TEXT into its own span, and the sentence around it is ours,
+      // so their text can neither become markup nor be read as a promise we are making. Blank is
+      // not a legal render: a sentence about nobody asks a human to consent to nothing.
+      // Clamped HERE TOO, not only in the bridge. The bridge is the only caller today and it does
+      // clamp, but this page is the last thing between an advertiser's name and a human's eyes,
+      // and unclamped the failure is total rather than ugly: a single U+202E reverses OUR sentence
+      // so the dialog reads backwards, and 4,000 characters push both buttons a screen below the
+      // fold. Escaped and never stripped -- dropping the character hides the payload just as well,
+      // only quietly. Same rule, same 80, as `sponsoredConsentName` in
+      // `common/src/ads/sponsored-consent.ts`; `consent-window.render.test.ts` pins them equal.
+      const who = clampName(sponsored.advertiser)
+      el('who').textContent = who
+      el('rest').textContent = who
+        ? ' wants to integrate itself into this project, on its own branch. Nothing is pushed until you review it.'
+        : ''
+      if (!who) {
+        el('rest').textContent = 'This dialog could not say who is asking — do not approve.'
+        el('rest').className = 'refuse'
+        el('yes').disabled = true
+      }
+    }
+    el('title').textContent = options.title || 'Approve this connector?'
+    el('message').textContent = options.message || ''
+    // Two separate fields, never one string re-split on a delimiter: the spec contains a command
+    // and arguments a human may have pasted from the internet, and text that can choose where the
+    // spec box ends can push the part that matters out of it.
+    // Blank is not a legal render here: an empty box above an Approve button asks a human to
+    // approve a launch the dialog is not describing. Refuse loudly instead.
+    el('spec').textContent =
+      options.specText || '(this dialog could not describe what would run — do not approve)'
+    el('detail').textContent = options.explanation ?? ''
+    if (!options.specText) el('yes').disabled = true
+    el('yes').textContent = go
+    el('no').focus()
+    document.title = options.title || 'Freebuff'
+    // A four-line command in a 420px window is mostly empty, and a forty-line argv is a scrollbar.
+    // The page is the only thing that knows which it got, so it says. Measured with the page free
+    // to be its own height: under `html, body { height: 100% }` scrollHeight reports the WINDOW,
+    // never the content, so a one-sentence dialog could only ever grow and never shrink to fit.
+    requestAnimationFrame(() => {
+      document.documentElement.classList.add('measure')
+      const px = Math.ceil(document.body.getBoundingClientRect().height)
+      document.documentElement.classList.remove('measure')
+      window.consent.height(px)
+    })
+  })
+
+  const answer = (approved) => window.consent.answer(approved)
+  el('yes').addEventListener('click', () => answer(true))
+  el('no').addEventListener('click', () => answer(false))
+  // Escape is a refusal, matching every other dismissable surface in the app.
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') answer(false)
+  })
+</script>

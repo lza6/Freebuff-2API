@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Freebuff Desktop</title>
+    <!-- This must not depend on the built JS or CSS: it is the UI for an install
+         whose entry assets are missing. React removes it when the app mounts. -->
+    <style>
+      :root {
+        --recovery-space-2: 8px;
+        --recovery-space-3: 12px;
+        --recovery-space-4: 16px;
+        --recovery-space-6: 24px;
+        --recovery-radius-control: 8px;
+        --recovery-radius-dialog: 12px;
+        --recovery-font-ui: 13px;
+        --recovery-font-body: 14px;
+        --recovery-font-title: 18px;
+        --recovery-weight-semibold: 600;
+      }
+      #startup-recovery {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: var(--recovery-space-6);
+        visibility: hidden;
+        background: #0c0d0f;
+        color: #e5e7eb;
+        font: var(--recovery-font-body) / 1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        animation: reveal-startup-recovery 0s 15s forwards;
+      }
+      #startup-recovery section {
+        box-sizing: border-box;
+        width: min(440px, 100%);
+        padding: var(--recovery-space-6);
+        border: 1px solid #2a2d32;
+        border-radius: var(--recovery-radius-dialog);
+        background: #15171a;
+        box-shadow: 0 18px 60px rgb(0 0 0 / 35%);
+      }
+      #startup-recovery h1 {
+        margin: 0 0 var(--recovery-space-2);
+        color: #f3f4f6;
+        font-size: var(--recovery-font-title);
+        font-weight: var(--recovery-weight-semibold);
+        line-height: 1.3;
+      }
+      #startup-recovery p {
+        margin: 0 0 var(--recovery-space-4);
+        color: #9ca3af;
+      }
+      #startup-recovery .actions {
+        display: flex;
+        align-items: center;
+        gap: var(--recovery-space-3);
+        flex-wrap: wrap;
+      }
+      #startup-recovery .primary {
+        padding: var(--recovery-space-2) var(--recovery-space-3);
+        border-radius: var(--recovery-radius-control);
+        background: #7cff3f;
+        color: #0c0d0f;
+        font: var(--recovery-weight-semibold) var(--recovery-font-ui) -apple-system, BlinkMacSystemFont,
+          'Segoe UI', sans-serif;
+      }
+      #startup-recovery a {
+        color: #b7ff94;
+        font-weight: var(--recovery-weight-semibold);
+        text-decoration: none;
+      }
+      @keyframes reveal-startup-recovery {
+        to {
+          visibility: visible;
+        }
+      }
+    </style>
+    <!-- All of the app's error reporting lives inside the module below, so it cannot report the one
+         failure that matters most: the module never running. A mis-served or missing asset leaves a
+         blank window that reaches no error boundary and logs nothing anywhere. These hooks are
+         inline, classic rather than module, and in the head before Vite's generated asset tags. -->
+    <script>
+      ;(function () {
+        var sent = {}
+        function report(name, message, stack) {
+          if (!message || sent[name + message]) return
+          sent[name + message] = 1
+          try {
+            fetch('/api/diagnostics/renderer-error', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name: name, message: message, stack: stack, boundary: 'bootstrap' }),
+              // survives the window being closed on a dead-looking app
+              keepalive: true,
+            })['catch'](function () {})
+          } catch (e) {}
+        }
+        // Capture phase: a failed script or stylesheet fires on the element and does not bubble.
+        // Images are content, not renderer failures, and would only add noise here.
+        window.addEventListener(
+          'error',
+          function (event) {
+            var el = event.target
+            if (el && el !== window && el.tagName) {
+              if (el.tagName === 'SCRIPT' || el.tagName === 'LINK') {
+                report(
+                  'ResourceError',
+                  'failed to load ' + el.tagName.toLowerCase() + ': ' + (el.src || el.href || ''),
+                )
+              }
+              return
+            }
+            report((event.error && event.error.name) || 'Error', event.message, event.error && event.error.stack)
+          },
+          true,
+        )
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason
+          report(
+            (reason && reason.name) || 'UnhandledRejection',
+            (reason && reason.message) || String(reason),
+            reason && reason.stack,
+          )
+        })
+        setTimeout(function () {
+          if (document.getElementById('startup-recovery')) {
+            report('BlankWindow', 'nothing mounted 15s after the document loaded')
+          }
+        }, 15000)
+      })()
+    </script>
+    <script type="module" crossorigin src="./assets/index-Cec8WD1I.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-R1PBR6i2.css">
+  </head>
+  <body>
+    <div id="root">
+      <main id="startup-recovery" role="alert">
+        <section>
+          <h1>Freebuff couldn’t load</h1>
+          <p>
+            Part of the interface did not start. Reload once; if this screen returns, reinstall the
+            latest version. Your projects and conversations are safe.
+          </p>
+          <div class="actions">
+            <a class="primary" href="">Reload Freebuff</a>
+            <a href="https://freebuff.com/desktop" target="_blank" rel="noreferrer">
+              Get latest installer
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

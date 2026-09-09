@@ -156,7 +156,7 @@ pub fn load_tokens(path: &str) -> Result<Vec<ExtractedAuth>> {
     Ok(parsed)
 }
 
-/// 从任意文本自动嗅探：优先按 curl，再按 HAR，最后按裸 "Bearer xxx"
+/// 从任意文本自动嗅探：优先按 curl，再按 HAR，再按 Cookie 串，最后按裸 "Bearer xxx"
 pub fn sniff_tokens(text: &str) -> Result<Vec<ExtractedAuth>> {
     if text.contains("curl") || text.contains("--url") {
         let v = parse_curl(text);
@@ -170,6 +170,10 @@ pub fn sniff_tokens(text: &str) -> Result<Vec<ExtractedAuth>> {
                 return Ok(v);
             }
         }
+    }
+    // 完整 Cookie 串（含 __Secure-next-auth.session-token 等）
+    if let Some(v) = parse_cookie(text) {
+        return Ok(v);
     }
     // 裸 Bearer token
     let re = regex::Regex::new(r"(?i)bearer\s+([A-Za-z0-9._-]{16,})").unwrap();
@@ -189,10 +193,37 @@ pub fn sniff_tokens(text: &str) -> Result<Vec<ExtractedAuth>> {
         }
     }
     if out.is_empty() {
-        Err(anyhow!("未能从输入中提取到任何 Bearer token"))
+        Err(anyhow!("未能从输入中提取到任何 Bearer token 或 Cookie"))
     } else {
         Ok(out)
     }
+}
+
+/// 解析完整 Cookie 串（web 版鉴权凭证）：提取包含 session-token 的 Cookie 整体
+pub fn parse_cookie(text: &str) -> Option<Vec<ExtractedAuth>> {
+    // 提取第一个含 "__Secure-next-auth.session-token=" 的 Cookie 片段（可能是完整串或部分）
+    let re = regex::Regex::new(r#"__Secure-next-auth\.session-token=[^; \t"']+"#).unwrap();
+    let csrf_re = regex::Regex::new(r#"__Host-next-auth\.csrf-token=[^; \t"']+"#).unwrap();
+    let cb_re = regex::Regex::new(r#"__Secure-next-auth\.callback-url=[^; \t"']+"#).unwrap();
+
+    let st = re.find(text)?;
+    let token = st.as_str().to_string();
+    // 组完整 Cookie 串：session-token + csrf + callback
+    let mut parts = vec![token.clone()];
+    if let Some(c) = csrf_re.find(text) {
+        parts.push(c.as_str().to_string());
+    }
+    if let Some(c) = cb_re.find(text) {
+        parts.push(c.as_str().to_string());
+    }
+    let cookie = parts.join("; ");
+    Some(vec![ExtractedAuth {
+        token: cookie,
+        source: "cookie".into(),
+        host: "freebuff.com".into(),
+        path: "/api/web/freebuff-session".into(),
+        method: "GET".into(),
+    }])
 }
 
 #[cfg(test)]
@@ -239,6 +270,14 @@ curl --url "https://www.codebuff.com/api/v1/freebuff/session" \
         let out = sniff_tokens("Authorization: Bearer abcdefghijklmnop1234567890").unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source, "raw");
+    }
+
+    #[test]
+    fn sniff_cookie() {
+        let out = sniff_tokens("__Secure-next-auth.session-token=abc123; __Host-next-auth.csrf-token=xyz").unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, "cookie");
+        assert!(out[0].token.contains("session-token"));
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/messages", axum::routing::post(handle_claude_messages))
         .route("/api/tokens/import", axum::routing::post(handle_token_import))
         .route("/api/tokens", get(handle_tokens_list))
+        .route("/api/account/balance", get(handle_account_balance))
         .merge(api)
         .with_state(state)
 }
@@ -123,7 +124,84 @@ async fn handle_usage_requests(State(st): State<AppState>) -> Response {
     }
 }
 
-/// 统一 500 JSON 错误响应
+// ---------- 账号余额查询（web 版协议） ----------
+
+/// GET /api/account/balance — 查询账号积分/每模型限额/套餐（用 web Cookie）
+async fn handle_account_balance(State(st): State<AppState>) -> Response {
+    // 候选：先找看起来像 Cookie 的 token（含 session-token），config 优先，其次导入库
+    let looks_like_cookie = |t: &str| t.contains("session-token") || t.contains(".next-auth") || t.contains("callback-url") || t.contains("%3A");
+    let cookie_candidate = st
+        .cfg
+        .auth_tokens
+        .iter()
+        .find(|t| looks_like_cookie(t))
+        .cloned()
+        .or_else(|| load_imported_token().filter(|t| looks_like_cookie(t)));
+    let cookie = match cookie_candidate {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "message": "未找到 web 版 Cookie 凭证。请在浏览器登录 freebuff.com 后从 DevTools 复制完整 Cookie（含 __Secure-next-auth.session-token=...）并 POST /api/tokens/import 导入" })),
+            )
+                .into_response();
+        }
+    };
+
+    let client = match crate::web_protocol::WebClient::new(cookie, "glm-5.3-flash".into()) {
+        Ok(c) => c,
+        Err(e) => return internal_err(&anyhow::Error::msg(e.to_string())),
+    };
+    match client.freebuff_session().await {
+        Ok(sess) => {
+            // 计算每模型剩余可用次数
+            let mut model_remaining = serde_json::Map::new();
+            if let Some(freebucks) = &sess.freebucks {
+                let remaining = freebucks.daily.as_ref().map(|d| d.remaining).unwrap_or(0.0);
+                if let Some(prices) = &freebucks.prices {
+                    for (model, price) in prices {
+                        let by_credit = if *price > 0.0 { (remaining / price).floor() as i64 } else { i64::MAX };
+                        let by_limit = if let Some(rl) = sess.rate_limits_by_model.as_ref().and_then(|v| v.get(model)) {
+                            let limit = rl.get("limit").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let recent = rl.get("recentCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if limit > 0 { (limit - recent).max(0) } else { i64::MAX }
+                        } else {
+                            i64::MAX
+                        };
+                        let usable = by_credit.min(by_limit);
+                        let usable = if usable == i64::MAX { -1 } else { usable }; // -1 = 该模型不消费积分也不限次数
+                        model_remaining.insert(model.clone(), serde_json::json!({
+                            "price": price,
+                            "by_credit_remaining": if by_credit == i64::MAX { -1 } else { by_credit },
+                            "by_limit_remaining": if by_limit == i64::MAX { -1 } else { by_limit },
+                            "usable_today": usable,
+                        }));
+                    }
+                }
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "status": sess.status,
+                "access_tier": sess.access_tier,
+                "freebucks": sess.freebucks,
+                "subscription": sess.subscription,
+                "rate_limits_by_model": sess.rate_limits_by_model,
+                "referral": sess.referral,
+                "country_code": sess.country_code,
+                "country_block_reason": sess.country_block_reason,
+                "model_remaining": model_remaining,
+                "message": sess.message,
+            }))
+            .into_response()
+        }
+        Err(e) => internal_err(&e),
+    }
+}
+
+/// 读取 data/tokens.json 中第一个导入 token
+fn load_imported_token() -> Option<String> {
+    crate::import::load_tokens("data/tokens.json").ok().and_then(|t| t.into_iter().next()).map(|t| t.token)
+}
 fn internal_err(e: &anyhow::Error) -> Response {
     tracing::error!("用量统计查询失败: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()

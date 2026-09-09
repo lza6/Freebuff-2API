@@ -412,9 +412,25 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         }
     };
 
-    // 配置上行 body：设 model + codebuff_metadata 注入
+    // 配置上行 body：设 model + 思考程度降级/剥离 + codebuff_metadata 注入
     let mut up_body = parsed.clone();
     up_body["model"] = serde_json::json!(model);
+    if let Some(effort) = up_body.get("reasoning_effort").and_then(|v| v.as_str()) {
+        match st.router.clamp_effort(&model, effort) {
+            Some(clamped) => {
+                if clamped != effort {
+                    tracing::debug!("模型 {model} effort {effort} 降级为 {clamped}");
+                    up_body["reasoning_effort"] = serde_json::json!(clamped);
+                }
+            }
+            None => {
+                tracing::debug!("模型 {model} 不支持 reasoning_effort，自动剥离");
+                if let Some(obj) = up_body.as_object_mut() {
+                    obj.remove("reasoning_effort");
+                }
+            }
+        }
+    }
     remove_passthrough_fields(&mut up_body);
 
     // 转发上游

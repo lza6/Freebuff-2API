@@ -58,6 +58,53 @@ impl ModelRouter {
     pub fn is_available(&self, model: &str) -> bool {
         self.registry.models_sync().contains(&model.to_string())
     }
+
+    /// 模型是否支持 reasoning_effort（思考程度），逆向自上游 orchestrator.js efforts 字段
+    /// 支持清单（efforts 非空）：deepseek 系/glm 系/gpt-5.6/gemini-3.8/fable-5/ox-alpha/muse-spark
+    /// 不支持（无 efforts 字段）：solar-pro4 / minimax-m3 / mimo-v2.5 / kimi-k3
+    pub fn supports_reasoning(&self, model: &str) -> bool {
+        // 支持 efforts 的模型前缀
+        const SUPPORTED: &[&str] = &[
+            "deepseek/",
+            "z-ai/glm",
+            "openai/gpt-5.6",
+            "google/gemini-3.8",
+            "anthropic/claude-fable",
+            "stealth/ox-alpha",
+            "meta/muse-spark",
+        ];
+        SUPPORTED.iter().any(|p| model.starts_with(p))
+    }
+
+    /// 模型支持的 efforts 范围（逆向自上游常量）；None = 不支持
+    pub fn reasoning_efforts(&self, model: &str) -> Option<Vec<&'static str>> {
+        if model.starts_with("deepseek/") || model.starts_with("z-ai/glm") || model.starts_with("stealth/ox-alpha") {
+            Some(vec!["low", "high", "max"])
+        } else if model.starts_with("openai/gpt-5.6") || model.starts_with("google/gemini-3.8") || model.starts_with("anthropic/claude-fable") {
+            Some(vec!["low", "medium", "high", "xhigh", "max"])
+        } else if model.starts_with("meta/muse-spark") {
+            Some(vec!["minimal", "low", "medium", "high", "xhigh"])
+        } else {
+            None
+        }
+    }
+
+    /// 校正 effort：不支持或超范围时降级到最近支持值
+    pub fn clamp_effort(&self, model: &str, requested: &str) -> Option<String> {
+        let efforts = self.reasoning_efforts(model)?;
+        let requested = requested.to_lowercase();
+        if efforts.contains(&requested.as_str()) {
+            return Some(requested);
+        }
+        // 超出范围：取 requests 同档 max → 支持上限
+        if requested == "max" || requested == "xhigh" || requested == "high" {
+            return Some(efforts.last().unwrap().to_string());
+        }
+        if requested == "minimal" || requested == "low" {
+            return Some(efforts.first().unwrap().to_string());
+        }
+        Some(efforts.first().unwrap().to_string())
+    }
 }
 
 /// 超长 tool_result 压缩（token 节省核心）

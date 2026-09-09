@@ -418,11 +418,9 @@ fn apply_event(result: &mut StreamResult, event: ChatEvent) {
             result.tools.push(format!("{name}: {label}"));
             result.tool_calls.push(ToolCallState { id: id.clone(), name, label, done: false });
         }
-        ChatEvent::AgentToolDone { tool_call_id } => {
-            if let Some(id) = tool_call_id {
-                if let Some(tc) = result.tool_calls.iter_mut().find(|t| t.id == id) {
-                    tc.done = true;
-                }
+        ChatEvent::AgentToolDone { tool_call_id: Some(id) } => {
+            if let Some(tc) = result.tool_calls.iter_mut().find(|t| t.id == id) {
+                tc.done = true;
             }
         }
         ChatEvent::AgentStart { agent_type, .. } => result.tools.push(format!("agent_start: {}", agent_type.unwrap_or_default())),

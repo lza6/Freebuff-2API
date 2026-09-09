@@ -1,0 +1,51 @@
+{
+  "name": "freebuff2api-desktop",
+  "version": "0.1.0",
+  "description": "Freebuff2API 桌面启动器（内嵌网关 + 控制台）",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "pack": "electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "com.freebuff2api.desktop",
+    "productName": "Freebuff2API",
+    "asar": true,
+    "files": [
+      "main.js",
+      "icons/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../target/release/freebuff2api.exe",
+        "to": "freebuff2api.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Freebuff2API"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

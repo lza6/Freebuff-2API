@@ -116,6 +116,18 @@ pub struct StreamResult {
     pub suggestions: Vec<Followup>,
     pub tools: Vec<String>,
     pub done: bool,
+    /// 转 OpenAI tool_calls 的中间态（agent_tool → agent_tool_done 对）
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallState>,
+}
+
+/// 上游 agent_tool 事件 → OpenAI 工具调用状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallState {
+    pub id: String,
+    pub name: String,
+    pub label: String,
+    pub done: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,9 +412,18 @@ fn apply_event(result: &mut StreamResult, event: ChatEvent) {
         ChatEvent::ReasoningDelta { text } => result.reasoning.push_str(&text),
         ChatEvent::Delta { text } => result.text.push_str(&text),
         ChatEvent::Suggestions { followups, .. } => result.suggestions = followups,
-        ChatEvent::AgentTool { tool_name: Some(name), label, .. } => {
-            let suffix = label.map(|l| format!(": {l}")).unwrap_or_default();
-            result.tools.push(format!("{name}{suffix}"));
+        ChatEvent::AgentTool { tool_name: Some(name), tool_call_id, label, .. } => {
+            let id = tool_call_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let label = label.unwrap_or_default();
+            result.tools.push(format!("{name}: {label}"));
+            result.tool_calls.push(ToolCallState { id: id.clone(), name, label, done: false });
+        }
+        ChatEvent::AgentToolDone { tool_call_id } => {
+            if let Some(id) = tool_call_id {
+                if let Some(tc) = result.tool_calls.iter_mut().find(|t| t.id == id) {
+                    tc.done = true;
+                }
+            }
         }
         ChatEvent::AgentStart { agent_type, .. } => result.tools.push(format!("agent_start: {}", agent_type.unwrap_or_default())),
         ChatEvent::Done => result.done = true,

@@ -32,3 +32,4 @@ desktop/node_modules/
 desktop/dist/
 graft/
 宣传视频/
+*.exe

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Freebuff2API 宣传片 · 最终合成</title>
+<style>
+  @font-face{font-family:'Inter';src:local('Segoe UI')}
+  @font-face{font-family:'JetBrains Mono';src:local('Consolas')}
+  @font-face{font-family:'Noto Sans SC';src:local('Microsoft YaHei')}
+  :root{
+    --bg:#0d1117; --card:#161b22; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#2f81f7;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:#000;overflow:hidden}
+  body{font-family:'Inter','Noto Sans SC',sans-serif}
+  .mono{font-family:'JetBrains Mono',Consolas,monospace}
+  .clip{position:absolute;top:0;left:0;width:1080px;height:1920px}
+  .line{white-space:pre;display:block}
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="freebuff2api-promo" data-start="0" data-duration="60" data-width="1080" data-height="1920" data-fps="30">
+
+  <!-- ============ SHOT 1 · HOOK (0-4s) ============ -->
+  <div id="shot1" class="clip" data-start="0" data-duration="4" data-track-index="0"
+       style="background:linear-gradient(180deg,#0d1117 0%,#010409 100%);display:flex;flex-direction:column;justify-content:center;padding:0 80px">
+    <div class="mono h1-line" style="font-size:46px;color:var(--ok);line-height:1.6;opacity:0">> ./freebuff2api</div>
+    <div class="mono h1-line" style="font-size:52px;color:#fff;font-weight:200;line-height:1.6;opacity:0">Free Model API</div>
+    <div class="mono h1-line" style="font-size:46px;color:var(--accent);line-height:1.6;opacity:0">zero-cost gateway</div>
+    <div class="mono h1-line" style="font-size:40px;color:var(--muted);line-height:1.6;opacity:0">ready.</div>
+  </div>
+
+  <!-- ============ SHOT 2 · PROBLEM (4-11s) ============ -->
+  <div id="shot2" class="clip" data-start="4" data-duration="7" data-track-index="0"
+       style="background:#010409;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px;text-align:center">
+    <div id="p2-x" style="font-size:220px;color:var(--err);font-weight:100;opacity:0">✕</div>
+    <div id="p2-1" class="mono" style="font-size:44px;color:var(--text);margin-top:40px;opacity:0">AI 客户端都要付费 key？</div>
+    <div id="p2-2" class="mono" style="font-size:40px;color:var(--muted);margin-top:20px;opacity:0">API 账单越用越贵。</div>
+    <div id="p2-3" style="font-size:56px;color:#fff;font-weight:200;margin-top:70px;opacity:0;letter-spacing:2px">There&rsquo;s a better way.</div>
+  </div>
+
+  <!-- ============ SHOT 3 · PRODUCT (11-20s) ============ -->
+  <div id="shot3" class="clip" data-start="11" data-duration="9" data-track-index="0"
+       style="background:#010409;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px">
+    <div id="p3-term" class="mono" style="background:var(--card);border:1px solid var(--border);border-radius:14px;width:100%;padding:44px;font-size:32px;color:var(--text);line-height:1.7;overflow:hidden">
+      <div class="t3-line" style="opacity:0">&gt; ./freebuff2api --config config.json</div>
+      <div class="t3-line" style="opacity:0">&nbsp;</div>
+      <div class="t3-line" style="opacity:0;color:var(--muted)">  Freebuff2API v0.1.0 (Rust Gateway)</div>
+      <div class="t3-line" style="opacity:0"><span style="color:var(--ok)">[OK]</span> 监听 127.0.0.1:8787</div>
+      <div class="t3-line" style="opacity:0"><span style="color:var(--ok)">[OK]</span> 账号数 2</div>
+      <div class="t3-line" style="opacity:0"><span style="color:var(--ok)">[OK]</span> 模型注册表加载 20 个模型</div>
+      <div class="t3-line" style="opacity:0"><span style="color:var(--ok)">[OK]</span> HTTP 服务就绪</div>
+      <div class="t3-line" style="opacity:0"><span style="color:var(--accent)">[UI]</span> http://127.0.0.1:8787/ui</div>
+      <div class="t3-line" style="opacity:0">&nbsp;</div>
+      <div class="t3-line" style="opacity:0">&gt; 双协议就绪：</div>
+      <div class="t3-line" style="opacity:0">  <span style="color:var(--accent)">POST /v1/chat/completions</span> (OpenAI)</div>
+      <div class="t3-line" style="opacity:0">  <span style="color:var(--accent)">POST /v1/messages</span>         (Claude)</div>
+    </div>
+    <div id="p3-caption" style="font-size:52px;color:#fff;font-weight:200;margin-top:56px;letter-spacing:1px;opacity:0">One binary. Two protocols.</div>
+    <div id="p3-sub" style="font-size:26px;color:var(--muted);font-weight:300;margin-top:18px;opacity:0">OpenAI + Claude 兼容</div>
+  </div>
+
+  <!-- ============ SHOT 4 · FEATURE 1 双协议 (20-28s) ============ -->
+  <div id="shot4" class="clip" data-start="20" data-duration="8" data-track-index="0"
+       style="background:linear-gradient(180deg,#0d1117,#010409);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px">
+    <div id="f4-title" style="font-size:64px;color:#fff;font-weight:200;letter-spacing:-1px;opacity:0">双协议出口</div>
+    <div id="f4-tabs" style="display:flex;gap:18px;margin-top:50px;flex-wrap:wrap;justify-content:center">
+      <div id="f4-tab1" class="mono" style="background:var(--card);border:1px solid var(--accent);border-radius:12px;padding:26px 40px;font-size:28px;color:var(--accent);opacity:0">/v1/chat/completions</div>
+      <div id="f4-tab2" class="mono" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:26px 40px;font-size:28px;color:var(--muted);opacity:0">/v1/messages</div>
+    </div>
+    <div id="f4-logos" style="display:flex;gap:22px;margin-top:52px;flex-wrap:wrap;justify-content:center">
+      <div class="f4-logo" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 28px;font-size:26px;color:var(--text);opacity:0">LobeChat</div>
+      <div class="f4-logo" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 28px;font-size:26px;color:var(--text);opacity:0">Claude Code</div>
+      <div class="f4-logo" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 28px;font-size:26px;color:var(--text);opacity:0">Codex</div>
+      <div class="f4-logo" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 28px;font-size:26px;color:var(--text);opacity:0">Cursor</div>
+    </div>
+    <div id="f4-sub" style="font-size:24px;color:var(--muted);margin-top:44px;opacity:0;letter-spacing:1px">任意 OpenAI / Claude SDK 即插即用</div>
+  </div>
+
+  <!-- ============ SHOT 5 · FEATURE 2 run 树自动 (28-35s) ============ -->
+  <div id="shot5" class="clip" data-start="28" data-duration="7" data-track-index="0"
+       style="background:#010409;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px">
+    <div id="f5-title" style="font-size:60px;color:#fff;font-weight:200;opacity:0">Run 层级自动维护</div>
+    <div id="f5-tree" class="mono" style="margin-top:54px;font-size:30px;line-height:2;color:var(--muted)">
+      <div class="f5-line" style="opacity:0">session</div>
+      <div class="f5-line" style="opacity:0;padding-left:34px">&nbsp;&nbsp;&#9492;&#9472;&#9472; root run <span style="color:var(--ok)">base2-free</span></div>
+      <div class="f5-line" style="opacity:0;padding-left:68px">&nbsp;&nbsp;&nbsp;&nbsp;&#9492;&#9472;&#9472; sub-agent run <span style="color:var(--accent)">code-reviewer-*</span></div>
+    </div>
+    <div id="f5-chip" style="margin-top:40px;background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.35);color:var(--ok);border-radius:20px;padding:14px 30px;font-size:26px;opacity:0">零感知 · 自动保活 · 惰性创建</div>
+  </div>
+
+  <!-- ============ SHOT 6 · FEATURE 3 多 Token 轮换 (35-43s) ============ -->
+  <div id="shot6" class="clip" data-start="35" data-duration="8" data-track-index="0"
+       style="background:linear-gradient(180deg,#0d1117,#010409);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px">
+    <div id="f6-title" style="font-size:60px;color:#fff;font-weight:200;opacity:0">多 Token 轮换</div>
+    <div id="f6-row" style="display:flex;gap:16px;margin-top:54px">
+      <div class="f6-tok" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px 26px;font-size:26px;color:var(--muted);opacity:0">token-A</div>
+      <div class="f6-tok" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px 26px;font-size:26px;color:var(--muted);opacity:0">token-B</div>
+      <div class="f6-tok" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px 26px;font-size:26px;color:var(--muted);opacity:0">token-C</div>
+    </div>
+    <div id="f6-bar" style="margin-top:46px;background:var(--card);border:1px solid var(--border);border-radius:8px;width:100%;height:16px;overflow:hidden">
+      <div id="f6-fill" style="width:0%;height:100%;background:linear-gradient(90deg,var(--accent),#58a6ff)"></div>
+    </div>
+    <div id="f6-sub" style="font-size:24px;color:var(--muted);margin-top:36px;opacity:0">并发租约 · 401 自动冷却 · 周期轮换</div>
+  </div>
+
+  <!-- ============ SHOT 7 · Web 控制台 (43-52s) ============ -->
+  <div id="shot7" class="clip" data-start="43" data-duration="9" data-track-index="0"
+       style="background:#010409;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 80px">
+    <div id="f7-title" style="font-size:60px;color:#fff;font-weight:200;opacity:0;margin-bottom:40px">内置 Web 控制台</div>
+    <div id="f7-browser" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:0 30px 60px rgba(0,0,0,.5)">
+      <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);background:#0d1117">
+        <span style="width:12px;height:12px;border-radius:50%;background:#ff5f56"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#ffbd2e"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#27c93f"></span>
+        <span class="mono" style="font-size:20px;color:var(--muted);margin-left:14px">127.0.0.1:8787/ui</span>
+      </div>
+      <div style="padding:30px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+          <div class="f7-stat" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:20px;opacity:0">
+            <div style="font-size:20px;color:var(--muted)">总请求</div>
+            <div style="font-size:42px;color:#fff;font-weight:600;margin-top:8px">2,048</div>
+          </div>
+          <div class="f7-stat" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:20px;opacity:0">
+            <div style="font-size:20px;color:var(--muted)">总 Token</div>
+            <div style="font-size:42px;color:#fff;font-weight:600;margin-top:8px">1.2M</div>
+          </div>
+        </div>
+        <div class="f7-stat" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:20px;margin-top:18px;opacity:0">
+          <div style="font-size:20px;color:var(--muted)">账号健康度</div>
+          <div style="display:flex;gap:10px;margin-top:14px">
+            <span class="mono" style="background:rgba(63,185,80,.15);color:var(--ok);border-radius:16px;padding:6px 16px;font-size:18px">token-A ok</span>
+            <span class="mono" style="background:rgba(63,185,80,.15);color:var(--ok);border-radius:16px;padding:6px 16px;font-size:18px">token-B ok</span>
+            <span class="mono" style="background:rgba(210,153,34,.15);color:var(--warn);border-radius:16px;padding:6px 16px;font-size:18px">token-C wait</span>
+          </div>
+        </div>
+        <div style="margin-top:18px">
+          <div class="f7-bar" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:16px;font-size:20px;color:var(--muted);opacity:0">
+            近 24h 用量 <span style="float:right;color:var(--accent)">+38%</span>
+            <div style="height:8px;background:var(--border);border-radius:4px;margin-top:12px;overflow:hidden"><div style="width:62%;height:100%;background:var(--accent)"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SHOT 8 · CTA (52-60s) ============ -->
+  <div id="shot8" class="clip" data-start="52" data-duration="8" data-track-index="0"
+       style="background:radial-gradient(ellipse at 50% 40%, #1b2735 0%, #010409 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 60px;text-align:center">
+    <div id="f8-star" style="font-size:130px;color:var(--warn);opacity:0">★</div>
+    <div id="f8-title" style="font-size:74px;color:#fff;font-weight:200;letter-spacing:-1px;opacity:0;margin-top:40px">Freebuff2API</div>
+    <div id="f8-repo" class="mono" style="font-size:38px;color:var(--accent);opacity:0;margin-top:34px">github.com/lza6/Freebuff-2API</div>
+    <div id="f8-sub" style="font-size:28px;color:var(--muted);font-weight:300;opacity:0;margin-top:44px">Rust 单二进制 · 免费模型当 API 用</div>
+    <div id="f8-cta" style="margin-top:56px;background:var(--ok);color:#04260f;border-radius:46px;padding:26px 76px;font-size:40px;font-weight:600;opacity:0">去 GitHub 点亮 ⭐</div>
+  </div>
+
+</div>
+<script src="vendor/gsap.min.js"></script>
+<script>
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({ paused: true });
+
+/* ============ SHOT 1 · HOOK (0-4s) 打字式逐行浮现 ============ */
+tl.fromTo(".h1-line", {opacity:0,y:16},{opacity:1,y:0,duration:.3,stagger:.22,ease:"power2.out"},0.2);
+tl.to("#shot1", {opacity:0,duration:.35,ease:"power2.in"},3.55);
+
+/* ============ SHOT 2 · PROBLEM (4-11s) ============ */
+tl.fromTo("#p2-x", {opacity:0,scale:0},{opacity:1,scale:1,duration:.5,ease:"elastic.out(1,0.5)"},4.4);
+tl.fromTo("#p2-1", {opacity:0,y:20},{opacity:1,y:0,duration:.4,ease:"power2.out"},5.0);
+tl.fromTo("#p2-2", {opacity:0,y:20},{opacity:1,y:0,duration:.4,ease:"power2.out"},5.6);
+tl.fromTo("#p2-3", {opacity:0},{opacity:1,duration:.8,ease:"power2.out"},9.0);
+tl.to("#shot2", {opacity:0,duration:.4,ease:"power2.in"},10.4);
+
+/* ============ SHOT 3 · PRODUCT 终端启动逐行 (11-20s) ============ */
+tl.fromTo("#p3-term", {opacity:0,scale:.96},{opacity:1,scale:1,duration:.6,ease:"power2.out"},11.4);
+tl.fromTo(".t3-line", {opacity:0},{opacity:1,duration:.15,ease:"none",stagger:.28},12.0);
+tl.fromTo("#p3-caption", {opacity:0,y:20},{opacity:1,y:0,duration:.5,ease:"power2.out"},17.0);
+tl.fromTo("#p3-sub", {opacity:0,y:16},{opacity:1,y:0,duration:.5,ease:"power2.out"},17.6);
+tl.to("#shot3", {opacity:0,duration:.4,ease:"power2.in"},19.4);
+
+/* ============ SHOT 4 · 双协议 (20-28s) ============ */
+tl.fromTo("#f4-title", {opacity:0,y:-20},{opacity:1,y:0,duration:.5,ease:"power2.out"},20.5);
+tl.fromTo("#f4-tab1", {opacity:0,y:24},{opacity:1,y:0,duration:.4,ease:"power2.out"},21.2);
+tl.fromTo("#f4-tab2", {opacity:0,y:24},{opacity:1,y:0,duration:.4,ease:"power2.out"},21.7);
+tl.fromTo(".f4-logo", {opacity:0,y:24},{opacity:1,y:0,duration:.4,stagger:.15,ease:"power2.out"},22.6);
+tl.fromTo("#f4-sub", {opacity:0},{opacity:1,duration:.5},25.0);
+tl.to("#shot4", {opacity:0,duration:.4,ease:"power2.in"},27.4);
+
+/* ============ SHOT 5 · Run 树 (28-35s) ============ */
+tl.fromTo("#f5-title", {opacity:0,y:-20},{opacity:1,y:0,duration:.5,ease:"power2.out"},28.5);
+tl.fromTo(".f5-line", {opacity:0,x:-14},{opacity:1,x:0,duration:.35,stagger:.4,ease:"power2.out"},29.2);
+tl.fromTo("#f5-chip", {opacity:0,scale:.9},{opacity:1,scale:1,duration:.4,ease:"back.out(1.6)"},32.4);
+tl.to("#shot5", {opacity:0,duration:.4,ease:"power2.in"},34.4);
+
+/* ============ SHOT 6 · 多 Token 轮换 (35-43s) ============ */
+tl.fromTo("#f6-title", {opacity:0,y:-20},{opacity:1,y:0,duration:.5,ease:"power2.out"},35.5);
+tl.fromTo(".f6-tok", {opacity:0,y:20},{opacity:1,y:0,duration:.35,stagger:.2,ease:"power2.out"},36.2);
+tl.fromTo("#f6-fill", {width:"0%"},{width:"100%",duration:5,ease:"power1.inOut"},37.0);
+tl.fromTo("#f6-sub", {opacity:0},{opacity:1,duration:.5},39.5);
+tl.to("#shot6", {opacity:0,duration:.4,ease:"power2.in"},42.4);
+
+/* ============ SHOT 7 · Web 控制台 (43-52s) ============ */
+tl.fromTo("#f7-title", {opacity:0,y:-20},{opacity:1,y:0,duration:.5,ease:"power2.out"},43.5);
+tl.fromTo(".f7-stat", {opacity:0,y:16},{opacity:1,y:0,duration:.4,stagger:.25,ease:"power2.out"},44.4);
+tl.fromTo(".f7-bar", {opacity:0,y:16},{opacity:1,y:0,duration:.4,ease:"power2.out"},46.4);
+tl.to("#shot7", {opacity:0,duration:.4,ease:"power2.in"},51.4);
+
+/* ============ SHOT 8 · CTA (52-60s) ============ */
+tl.fromTo("#f8-star", {opacity:0,scale:0,rotate:-30},{opacity:1,scale:1,rotate:0,duration:.7,ease:"elastic.out(1,0.5)"},52.5);
+tl.fromTo("#f8-title", {opacity:0,y:-16},{opacity:1,y:0,duration:.6,ease:"power2.out"},53.4);
+tl.fromTo("#f8-repo", {opacity:0},{opacity:1,duration:.6},54.3);
+tl.fromTo("#f8-sub", {opacity:0},{opacity:1,duration:.6},55.2);
+tl.fromTo("#f8-cta", {opacity:0,y:16},{opacity:1,y:0,duration:.6,ease:"power2.out"},56.2);
+tl.to("#f8-cta", {scale:1.06,duration:.5,ease:"sine.inOut"},57.6);
+tl.to("#f8-cta", {scale:1,duration:.5,ease:"sine.inOut"},58.6);
+
+window.__timelines["freebuff2api-promo"] = tl;
+</script>
+</body>
+</html>

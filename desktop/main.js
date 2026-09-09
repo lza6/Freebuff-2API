@@ -2,10 +2,12 @@
 // - 拉起网关二进制（target/release/freebuff2api.exe）
 // - 等待 HTTP 就绪后加载本地控制面板
 // - 系统托盘 + 开机自启 + 优雅退出
+// - OAuth 一键登录：内置 BrowserWindow 打开 freebuff.com 登录页，登录成功后自动抓 Cookie 并 POST 到网关 /api/tokens/import
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
-const { spawn } = require('node:child_process');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, session } = require('electron');
+const { spawn, execFile } = require('node:child_process');
 const http = require('node:http');
+const https = require('node:https');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -102,18 +104,82 @@ function createTray() {
   const icon = path.join(__dirname, 'icons', 'icon.png');
   let trayIcon = nativeImage.createFromPath(icon);
   if (trayIcon.isEmpty()) {
-    // 无图标时用 1x1 透明占位
     trayIcon = nativeImage.createEmpty();
   }
   tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
   tray.setToolTip('Freebuff2API 网关');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开控制台', click: () => { if (!mainWindow) createWindow(); else mainWindow.show(); } },
+    { label: '➕ 一键登录新账号', click: openLoginWindow },
     { label: '健康检查', click: async () => { await checkHealth(); } },
     { type: 'separator' },
     { label: '退出', click: () => { app.isQuitting = true; if (gateway) gateway.kill(); app.quit(); } },
   ]));
   tray.on('click', () => { if (!mainWindow) createWindow(); else mainWindow.show(); });
+}
+
+// ---------- OAuth 一键登录 ----------
+let loginWindow = null;
+
+function buildCookieHeader(cookies) {
+  return cookies
+    .filter(c => c.value)
+    .map(c => `${c.name}=${c.value}`)
+    .join('; ');
+}
+
+function importCookiesToGateway(cookieStr) {
+  return new Promise((resolve) => {
+    const data = JSON.stringify({ cookie: cookieStr });
+    const req = http.request({
+      host: '127.0.0.1', port: GATEWAY_PORT, path: '/api/tokens/import',
+      method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) },
+    }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => resolve({ ok: res.statusCode < 400, body }));
+    });
+    req.on('error', (e) => resolve({ ok: false, body: String(e) }));
+    req.write(data);
+    req.end();
+  });
+}
+
+// 抓取 freebuff.com 会话 Cookie（含 next-auth 三件套）
+async function captureCookies() {
+  const ses = session.fromPartition('persist:freebuff-login');
+  const cookies = await ses.cookies.get({ url: 'https://freebuff.com' });
+  const cookieStr = buildCookieHeader(cookies);
+  if (cookieStr.includes('__Secure-next-auth.session-token')) {
+    const result = await importCookiesToGateway(cookieStr);
+    return { cookieStr, result };
+  }
+  return { cookieStr: '', result: { ok: false, body: '未检测到登录会话' } };
+}
+
+function openLoginWindow() {
+  if (loginWindow) { loginWindow.show(); return; }
+  const ses = session.fromPartition('persist:freebuff-login');
+  loginWindow = new BrowserWindow({
+    width: 1000, height: 720,
+    title: 'Freebuff 登录',
+    webPreferences: { nodeIntegration: false, contextIsolation: true, session: ses, partition: 'persist:freebuff-login' },
+  });
+  // 监听导航完成：当进入 /chat 或 /account（登录成功标志）时抓 Cookie
+  loginWindow.webContents.on('did-navigate', async (e, url) => {
+    if (/freebuff\.com\/(chat|account|web)/.test(url)) {
+      // 稍等 cookie 落盘
+      setTimeout(async () => {
+        const { cookieStr, result } = await captureCookies();
+        if (result.ok) {
+          loginWindow.webContents.executeJavaScript(`alert('✅ 登录成功，Cookie 已自动入库！\n请在网关面板刷新查看账号')`);
+          setTimeout(() => { loginWindow.close(); loginWindow = null; }, 1500);
+        }
+      }, 1200);
+    }
+  });
+  loginWindow.on('closed', () => { loginWindow = null; });
+  loginWindow.loadURL('https://freebuff.com/');
 }
 
 app.on('ready', async () => {
@@ -123,6 +189,10 @@ app.on('ready', async () => {
   else ready = true;
   createWindow();
   createTray();
+
+  // 主窗口 IPC：面板点「一键登录」→ 打开登录窗口
+  ipcMain.handle('open-login', () => openLoginWindow());
+  ipcMain.handle('capture-cookie', async () => await captureCookies());
 });
 
 app.on('window-all-closed', (e) => {

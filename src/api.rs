@@ -57,6 +57,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tokens/import", axum::routing::post(handle_token_import))
         .route("/api/tokens", get(handle_tokens_list))
         .route("/api/account/balance", get(handle_account_balance))
+        .route("/api/account/detail", axum::routing::post(handle_account_detail))
         .merge(api)
         .with_state(state)
 }
@@ -311,6 +312,54 @@ async fn handle_tokens_list(State(st): State<AppState>) -> Response {
         )
             .into_response(),
     }
+}
+
+/// 账户详情卡片数据（每个账号的余额/套餐/限额）
+/// POST /api/account/detail — body { cookie: "..." } 可选；空则用已导入第一个
+async fn handle_account_detail(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+    // 解析 body（可选 cookie）
+    let mut cookie: Option<String> = None;
+    if !body.is_empty() {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if let Some(c) = v.get("cookie").and_then(|c| c.as_str()) {
+                if c.contains("session-token") {
+                    cookie = Some(c.to_string());
+                }
+            }
+        }
+    }
+    let cookie = cookie.or_else(|| {
+        st.cfg.auth_tokens.iter().find(|t| t.contains("session-token")).cloned()
+            .or_else(|| load_imported_token().filter(|t| t.contains("session-token")))
+    });
+    let cookie = match cookie {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "message": "未找到 web Cookie 凭证" })),
+            )
+                .into_response();
+        }
+    };
+    let client = match crate::web_protocol::WebClient::new(cookie.clone(), "glm-5.3-flash".into()) {
+        Ok(c) => c,
+        Err(e) => return internal_err(&anyhow::Error::msg(e.to_string())),
+    };
+    // 并发拉取余额+用量+用户+套餐
+    let balance = client.freebuff_session().await;
+    let usage = client.usage_summary().await;
+    let auth = client.auth_session().await;
+    let subs = client.subscriptions().await;
+    Json(serde_json::json!({
+        "ok": true,
+        "cookie_masked": mask(&cookie),
+        "balance": balance.ok(),
+        "usage_summary": usage.ok(),
+        "user": auth.ok(),
+        "subscriptions": subs.ok(),
+    }))
+    .into_response()
 }
 
 /// 脱敏：只显示前 6 + 后 4

@@ -1,0 +1,30 @@
+event: freebuff.start
+data: {}
+
+event: text
+data: {"delta": "你好！", "state": "streaming", "reasoningDelta": ""}
+
+event: text
+data: {"delta": "我来自", "state": "streaming", "reasoningDelta": ""}
+
+event: text
+data: {"delta": " Freebuff2API 网关", "state": "streaming", "reasoningDelta": ""}
+
+event: text
+data: {"delta": "。零成本调用 Gemini！", "state": "streaming", "reasoningDelta": ""}
+
+event: reasoning
+data: {"delta": "正在组织回复...", "state": "streaming"}
+
+event: text
+data: {"delta": " 支持 OpenAI 与 Claude 双协议。", "state": "streaming", "reasoningDelta": ""}
+
+event: text
+data: {"delta": " 无需付费 key。", "state": "streaming", "reasoningDelta": ""}
+
+event: text
+data: {"delta": " 跑一个二进制即可。", "state": "streaming", "reasoningDelta": ""}
+
+event: done
+data: {"usage": {"prompt_tokens": 12, "completion_tokens": 58, "total_tokens": 70}, "model": "google/gemini-2.5-flash-lite"}
+

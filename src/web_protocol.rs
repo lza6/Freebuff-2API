@@ -232,7 +232,7 @@ impl WebClient {
 
         let byte_stream = resp.bytes_stream();
         let sse_buf: Vec<u8> = Vec::new();
-        let stream = futures::stream::unfold((byte_stream, sse_buf, false), |(mut stream, mut buf, mut done)| async move {
+        let stream = futures::stream::unfold((byte_stream, sse_buf, false), |(mut stream, mut buf, done)| async move {
             if done { return None; }
             loop {
                 match stream.next().await {

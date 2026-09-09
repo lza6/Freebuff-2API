@@ -42,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
     // 模型注册表
     let registry = Arc::new(ModelRegistry::new());
     registry.init().await;
-    if let Ok(added) = registry.refresh_from_upstream(&client_http()).await {
-        tracing::info!("模型注册表从上游补充 {added} 个模型");
+    if let Ok((added, removed)) = registry.refresh_from_upstream(&client_http()).await {
+        tracing::info!("模型注册表同步：新增 {added} 个，移除 {removed} 个");
     }
     let router = Arc::new(ModelRouter::new(registry.clone(), RouterConfig::default()));
 

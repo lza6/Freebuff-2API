@@ -105,34 +105,53 @@ impl ModelRegistry {
     }
 
     /// 拉取上游 free-agents.ts 增量补充
-    pub async fn refresh_from_upstream(&self, client: &reqwest::Client) -> Result<usize, anyhow::Error> {
+    pub async fn refresh_from_upstream(&self, client: &reqwest::Client) -> Result<(usize, usize), anyhow::Error> {
         const SRC: &str = "https://raw.githubusercontent.com/CodebuffAI/codebuff/main/common/src/constants/free-agents.ts";
         let resp = client.get(SRC).send().await?;
         if !resp.status().is_success() {
-            return Ok(0);
+            return Ok((0, 0));
         }
         let text = resp.text().await?;
         let parsed = parse_free_agents(&text);
         if parsed.is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
         let mut inner = self.inner.write().await;
         let mut added = 0;
+        let mut removed = 0;
+        // 合并硬编码底座（权威）+ 上游最新解析
+        let mut merged = hardcoded_fallback_map();
         for (agent, models) in parsed {
+            merged.entry(agent).or_default().extend(models);
+        }
+        // 重建 model→agent：以上游为准，不在上游也不在硬编码的移除
+        let mut new_model_to_agent = std::collections::HashMap::new();
+        for (agent, models) in &merged {
             for model in models {
-                if inner.model_to_agent.contains_key(&model) {
-                    continue;
+                if !new_model_to_agent.contains_key(model) {
+                    new_model_to_agent.insert(model.clone(), agent.clone());
                 }
-                inner.model_to_agent.insert(model.clone(), agent.clone());
+            }
+        }
+        // 计算增/删
+        for m in new_model_to_agent.keys() {
+            if !inner.model_to_agent.contains_key(m) {
                 added += 1;
             }
-            inner.agent_models.entry(agent).or_default();
         }
+        for m in inner.model_to_agent.keys() {
+            if !new_model_to_agent.contains_key(m) {
+                removed += 1;
+                tracing::warn!("模型 {m} 已从上游移除，同时不在硬编码底座，从注册表下架");
+            }
+        }
+        inner.model_to_agent = new_model_to_agent;
+        inner.agent_models = merged;
         let mut all: Vec<String> = inner.model_to_agent.keys().cloned().collect();
         all.sort();
         inner.all_models = all;
         inner.updated_at = Some(now_iso());
-        Ok(added)
+        Ok((added, removed))
     }
 
     pub async fn has_model(&self, model: &str) -> bool {
@@ -176,6 +195,19 @@ pub struct ModelRegistrySnapshot {
     pub agent_count: usize,
     pub all_models: Vec<String>,
     pub updated_at: Option<String>,
+}
+
+/// 硬编码底座 map（权威不随上游消失）
+fn hardcoded_fallback_map() -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    map.insert(
+        ROOT_AGENT_ID.to_string(),
+        HARDCODED_MODELS.iter().map(|s| s.to_string()).collect(),
+    );
+    for (agent, model) in SUB_AGENTS {
+        map.entry(agent.to_string()).or_default().push(model.to_string());
+    }
+    map
 }
 
 /// 解析上游 free-agents.ts 的 agent→models 映射

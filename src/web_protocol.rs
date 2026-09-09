@@ -400,11 +400,9 @@ fn apply_event(result: &mut StreamResult, event: ChatEvent) {
         ChatEvent::ReasoningDelta { text } => result.reasoning.push_str(&text),
         ChatEvent::Delta { text } => result.text.push_str(&text),
         ChatEvent::Suggestions { followups, .. } => result.suggestions = followups,
-        ChatEvent::AgentTool { tool_name, label, .. } => {
-            if let Some(name) = tool_name {
-                let suffix = label.map(|l| format!(": {l}")).unwrap_or_default();
-                result.tools.push(format!("{name}{suffix}"));
-            }
+        ChatEvent::AgentTool { tool_name: Some(name), label, .. } => {
+            let suffix = label.map(|l| format!(": {l}")).unwrap_or_default();
+            result.tools.push(format!("{name}{suffix}"));
         }
         ChatEvent::AgentStart { agent_type, .. } => result.tools.push(format!("agent_start: {}", agent_type.unwrap_or_default())),
         ChatEvent::Done => result.done = true,

@@ -1,0 +1,71 @@
+# Freebuff2API CI/CD — Windows 桌面安装包构建 + 自动发布 Release
+name: Build Windows Installer & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build gateway (release)
+        run: cargo build --release
+        env:
+          CARGO_HTTP_PROXY: "" # GitHub Actions 直连
+
+      - name: Run tests + clippy
+        run: |
+          cargo test
+          cargo clippy -- -D warnings
+
+      - name: Setup Node (Electron)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: npx electron-builder --win nsis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freebuff2api-windows
+          path: desktop/dist/*.exe
+
+      - name: Create/Update Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/*.exe
+          generate_release_notes: true

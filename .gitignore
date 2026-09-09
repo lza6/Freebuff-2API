@@ -26,3 +26,7 @@ config.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# 桌面壳构建产物/依赖（不入库）
+desktop/node_modules/
+desktop/dist/

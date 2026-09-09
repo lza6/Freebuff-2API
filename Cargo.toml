@@ -34,7 +34,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-util = "0.7"
 
 # 网络
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "brotli", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "brotli", "socks", "multipart", "cookies"] }
 
 # 日志与配置
 tracing = "0.1"

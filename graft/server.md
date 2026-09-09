@@ -1,0 +1,41 @@
+# server.go
+
+- Server · struct · L16-L23 — Server
+- NewServer · function · L25-L37 — func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server
+- Handler · method · L39-L47 — func (s *Server) Handler() http.Handler
+- Start · method · L49-L51 — func (s *Server) Start(ctx context.Context)
+- Shutdown · method · L53-L55 — func (s *Server) Shutdown(ctx context.Context)
+- withMiddleware · method · L57-L69 — func (s *Server) withMiddleware(next http.Handler) http.Handler
+- authorized · method · L71-L88 — func (s *Server) authorized(r *http.Request) bool
+- isClaudeRequestPath · function · L90-L92 — func isClaudeRequestPath(path string) bool
+- handleHealthz · method · L94-L107 — func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request)
+- handleModels · method · L109-L133 — func (s *Server) handleModels(w http.ResponseWriter, r *http.Request)
+- handleChatCompletions · method · L135-L171 — func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request)
+- handleClaudeMessages · method · L173-L211 — func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request)
+- handleClaudeCountTokens · method · L213-L246 — func (s *Server) handleClaudeCountTokens(w http.ResponseWriter, r *http.Request)
+- proxyChatRequest · method · L248-L349 — func (s *Server) proxyChatRequest( w http.ResponseWriter, r *http.Request, payload map[string]any, requestedModel string, invalidRequestType string, serverErrorType string, writeError func(http.ResponseWriter, int, string, string, string), writeUpstreamError func(http.ResponseWriter, int, []byte), writeSuccess func(http.ResponseWriter, *http.Response) error, )
+- writeOpenAISuccessResponse · function · L351-L355 — func writeOpenAISuccessResponse(w http.ResponseWriter, resp *http.Response) error
+- injectUpstreamMetadata · method · L357-L385 — func (s *Server) injectUpstreamMetadata(payload map[string]any, requestedModel, runID, sessionInstanceID string) ([]byte, error)
+- isSessionInvalid · function · L387-L403 — func isSessionInvalid(statusCode int, errorBody []byte) bool
+- normalizeToolSchemas · function · L408-L424 — func normalizeToolSchemas(tools []any)
+- extractDefinitions · function · L427-L443 — func extractDefinitions(schema map[string]any) map[string]any
+- mergeDefinitions · function · L445-L460 — func mergeDefinitions(parent, local map[string]any) map[string]any
+- normalizeSchemaValue · function · L462-L471 — func normalizeSchemaValue(value any, defs map[string]any, maxDepth int) any
+- normalizeSchemaMap · function · L473-L502 — func normalizeSchemaMap(node map[string]any, defs map[string]any, maxDepth int) map[string]any
+- normalizeSchemaSlice · function · L504-L513 — func normalizeSchemaSlice(slice []any, defs map[string]any, maxDepth int) []any
+- simplifyNullableCombinator · function · L515-L552 — func simplifyNullableCombinator(schema map[string]any, key string) map[string]any
+- normalizeTypeField · function · L554-L584 — func normalizeTypeField(schema map[string]any)
+- normalizeEnumField · function · L586-L609 — func normalizeEnumField(schema map[string]any)
+- normalizeConstField · function · L611-L615 — func normalizeConstField(schema map[string]any)
+- isNullSchema · function · L617-L628 — func isNullSchema(schema map[string]any) bool
+- tryResolveRef · function · L632-L656 — func tryResolveRef(node map[string]any, defs map[string]any) any
+- cloneMap · function · L658-L671 — func cloneMap(input map[string]any) map[string]any
+- cloneSlice · function · L673-L686 — func cloneSlice(input []any) []any
+- copyHeaders · function · L688-L698 — func copyHeaders(dst, src http.Header)
+- copyResponseBody · function · L700-L720 — func copyResponseBody(w http.ResponseWriter, body io.Reader) error
+- isRunInvalid · function · L722-L728 — func isRunInvalid(statusCode int, body []byte) bool
+- writePassthroughError · function · L730-L738 — func writePassthroughError(w http.ResponseWriter, statusCode int, body []byte)
+- extractUpstreamError · function · L740-L772 — func extractUpstreamError(body []byte) (message, errorType, code string)
+- writeOpenAIError · function · L774-L788 — func writeOpenAIError(w http.ResponseWriter, statusCode int, message, errorType, code string)
+- writeJSON · function · L790-L799 — func writeJSON(w http.ResponseWriter, statusCode int, payload any)
+- maxDuration · function · L801-L806 — func maxDuration(a, b time.Duration) time.Duration

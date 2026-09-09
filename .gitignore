@@ -1,16 +1,28 @@
-# 编译产物
-freebuff2api.exe
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# 运行产物
 *.exe
 *.log
-
-# 本地配置（含密钥，不入库）
-config.json
-
-# npm 临时包与解包源码
-*.tgz
-cfworker/*-src/
-cfworker/node_modules/
+/desktop/dist/
+/desktop/node_modules/
 node_modules/
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
-/graft/
+# 本地数据
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 运行时数据（不入库）
+/data/
+config.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

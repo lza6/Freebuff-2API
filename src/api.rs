@@ -1,0 +1,415 @@
+//! HTTP 路由：OpenAI 兼容 / Anthropic 兼容 / 控制面板 / 用量 API
+//!
+//! 依赖上游逆向协议：
+//! - POST /v1/chat/completions → 选 token→建会话→注入 codebuff_metadata→转发→SSE 流回
+//! - POST /v1/messages → Claude 协议转 OpenAI
+//! - GET  /v1/models → 注册表
+//! - GET  /healthz → 含账号健康快照
+//! - /ui 面板 + /api/usage/* 统计
+
+use crate::ads::AdRefresher;
+use crate::config::Config;
+use crate::models::ModelRegistry;
+use crate::pool::Pool;
+use crate::router::ModelRouter;
+
+use crate::upstream::UpstreamClient;
+use crate::usage::UsageDb;
+use anyhow::Result;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json, Router};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub cfg: Arc<Config>,
+    pub client: Arc<UpstreamClient>,
+    pub pool: Arc<Pool>,
+    pub registry: Arc<ModelRegistry>,
+    pub router: Arc<ModelRouter>,
+    pub usage: Arc<UsageDb>,
+    pub ads: Arc<AdRefresher>,
+    pub started: std::time::Instant,
+}
+
+pub fn build_router(state: AppState) -> Router {
+    let api = Router::new()
+        .route("/api/usage/totals", get(handle_usage_totals))
+        .route("/api/usage/daily", get(handle_usage_daily))
+        .route("/api/usage/requests", get(handle_usage_requests))
+        .route("/api/usage/models", get(handle_usage_models))
+        .route("/api/usage/accounts", get(handle_accounts));
+
+    Router::new()
+        .route("/", get(handle_dashboard))
+        .route("/ui", get(handle_dashboard))
+        .route("/healthz", get(handle_healthz))
+        .route("/v1/models", get(handle_v1_models))
+        .route("/v1/chat/completions", axum::routing::post(handle_chat_completions))
+        .route("/v1/messages", axum::routing::post(handle_claude_messages))
+        .merge(api)
+        .with_state(state)
+}
+
+// ---------- 面板 & 健康 ----------
+
+async fn handle_dashboard() -> impl IntoResponse {
+    Response::builder()
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(crate::web::INDEX_HTML))
+        .unwrap()
+}
+
+async fn handle_healthz(State(st): State<AppState>) -> impl IntoResponse {
+    let dur = st.started.elapsed();
+    let json = serde_json::json!({
+        "ok": true,
+        "uptime_sec": dur.as_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "accounts": st.pool.snapshot().await.accounts,
+        "model_count": st.registry.snapshot().await.model_count,
+        "ads": st.ads.snapshot().await,
+    });
+    Json(json)
+}
+
+async fn handle_v1_models(State(st): State<AppState>) -> impl IntoResponse {
+    let models = st.registry.models().await;
+    let data: Vec<serde_json::Value> = models
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m,
+                "object": "model",
+                "created": st.started.elapsed().as_secs() as i64,
+                "owned_by": "Freebuff2API",
+                "root": m,
+                "permission": [],
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "object": "list", "data": data }))
+}
+
+// ---------- 用量 API ----------
+
+async fn handle_usage_totals(State(st): State<AppState>) -> Response {
+    match st.usage.totals() {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal_err(&e),
+    }
+}
+
+async fn handle_usage_daily(State(st): State<AppState>) -> Response {
+    match st.usage.daily_usage(7) {
+        Ok(v) => Json(serde_json::json!(v)).into_response(),
+        Err(e) => internal_err(&e),
+    }
+}
+
+async fn handle_usage_requests(State(st): State<AppState>) -> Response {
+    match st.usage.recent_requests(50) {
+        Ok(v) => Json(serde_json::json!(v)).into_response(),
+        Err(e) => internal_err(&e),
+    }
+}
+
+/// 统一 500 JSON 错误响应
+fn internal_err(e: &anyhow::Error) -> Response {
+    tracing::error!("用量统计查询失败: {e}");
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+}
+
+async fn handle_usage_models(State(st): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!(st.registry.models().await))
+}
+
+async fn handle_accounts(State(st): State<AppState>) -> impl IntoResponse {
+    Json(st.pool.snapshot().await)
+}
+
+// ---------- OpenAI 兼容 ----------
+
+async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+    // 解析请求
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": { "message": "request body must be valid JSON", "type": "invalid_request_error" } })),
+            )
+                .into_response();
+        }
+    };
+
+    let requested = parsed.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    if requested.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": { "message": "model is required", "type": "invalid_request_error" } })),
+        )
+            .into_response();
+    }
+
+    // API key 校验
+    if !st.cfg.api_keys.is_empty() && !authorized(&headers, &st.cfg.api_keys) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": { "message": "invalid proxy api key", "type": "authentication_error" } })),
+        )
+            .into_response();
+    }
+
+    // 模型路由降级
+    let model = st.router.resolve(&requested).await;
+
+    // 挑 token
+    let account = match st.pool.pick_best().await {
+        Some(a) => a,
+        None => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": { "message": "no healthy upstream auth token available", "type": "server_error" } })),
+            )
+                .into_response();
+        }
+    };
+    let account_name = account.name.clone();
+    let token = account.token.clone();
+
+    // 确保会话
+    let instance_id = match account.session.ensure_session(&model).await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.starts_with("waiting_room_queued") {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": { "message": msg, "type": "server_error", "code": "waiting_room_queued" } })),
+                )
+                    .into_response();
+            }
+            st.pool
+                .update_score(&account_name, -30.0)
+                .await;
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": { "message": format!("failed to acquire free session: {msg}"), "type": "server_error" } })),
+            )
+                .into_response();
+        }
+    };
+
+    // run 管理：取根 run（惰性）
+    let run_id = match ensure_root_run(&st, &account_name, &token).await {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": { "message": format!("create run failed: {e}"), "type": "server_error" } })),
+            )
+                .into_response();
+        }
+    };
+
+    // 配置上行 body：设 model + codebuff_metadata 注入
+    let mut up_body = parsed.clone();
+    up_body["model"] = serde_json::json!(model);
+    remove_passthrough_fields(&mut up_body);
+
+    // 转发上游
+    let upstream_resp = match st
+        .client
+        .chat_completions(&token, up_body.clone(), &run_id, instance_id.as_deref())
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            st.pool.update_score(&account_name, -40.0).await;
+            let msg = e.to_string();
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": { "message": msg, "type": "server_error" } })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = upstream_resp.status();
+    let latency_ms = start.elapsed().as_millis() as i64;
+
+    // 用量记录
+    let api_key = headers
+        .get("x-api-key")
+        .or_else(|| headers.get("authorization"))
+        .map(|v| v.to_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+
+    if status.is_success() {
+        st.usage
+            .record(&account_name, &model, 0, 0, latency_ms, 200, &api_key, &client_ip)
+            .ok();
+        st.pool.update_score(&account_name, 10.0).await;
+    } else {
+        st.usage
+            .record(&account_name, &model, 0, 0, latency_ms, status.as_u16() as i64, &api_key, &client_ip)
+            .ok();
+        st.pool.update_score(&account_name, -20.0).await;
+    }
+
+    // 流式转发上游响应
+    let mut builder = Response::builder().status(status);
+    for (k, v) in upstream_resp.headers() {
+        if k != "content-length" && k != "transfer-encoding" {
+            builder = builder.header(k, v);
+        }
+    }
+    builder
+        .body(Body::from_stream(upstream_resp.bytes_stream()))
+        .unwrap()
+        .into_response()
+}
+
+async fn ensure_root_run(st: &AppState, account_name: &str, token: &str) -> Result<String> {
+    // 简化：每个账号惰性建根 run 并缓存（进程内 Arc<Mutex> 缓存方案由后续打补）
+    // 此处直接新建根 run，避免首次建 run 的复杂度
+    let run_id = st
+        .client
+        .start_run(token, crate::models::ROOT_AGENT_ID, &[])
+        .await?;
+    st.pool.update_score(account_name, 5.0).await;
+    Ok(run_id)
+}
+
+// ---------- Anthropic 兼容 ----------
+
+async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "type": "error", "error": { "type": "invalid_request_error", "message": "invalid json" } })),
+            )
+                .into_response();
+        }
+    };
+
+    if !st.cfg.api_keys.is_empty() && !authorized(&headers, &st.cfg.api_keys) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "type": "error", "error": { "type": "authentication_error", "message": "invalid proxy api key" } })),
+        )
+            .into_response();
+    }
+
+    let model = parsed.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    if model.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "type": "error", "error": { "type": "invalid_request_error", "message": "model is required" } })),
+        )
+            .into_response();
+    }
+    let resolved = st.router.resolve(&model).await;
+
+    let account = match st.pool.pick_best().await {
+        Some(a) => a,
+        None => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "type": "error", "error": { "type": "api_error", "message": "no healthy token" } })),
+            )
+                .into_response();
+        }
+    };
+    let token = account.token.clone();
+    let _ = account.session.ensure_session(&resolved).await;
+
+    // 简化 Claude 协议：转为 OpenAI 请求体转发
+    let mut up_body = serde_json::json!({
+        "model": resolved,
+        "messages": parsed.get("messages").cloned().unwrap_or(serde_json::json!([])),
+        "stream": parsed.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
+    });
+    if let Some(maxt) = parsed.get("max_tokens").and_then(|v| v.as_u64()) {
+        up_body["max_tokens"] = serde_json::json!(maxt);
+    }
+    // 系统提示 → 首条 user
+    if let Some(sys) = parsed.get("system") {
+        let mut msgs = up_body["messages"].as_array().cloned().unwrap_or_default();
+        msgs.insert(0, serde_json::json!({ "role": "system", "content": sys }));
+        up_body["messages"] = serde_json::json!(msgs);
+    }
+
+    let run_id = match ensure_root_run(&st, &account.name, &token).await {
+        Ok(id) => id,
+        Err(_) => "no-run".into(),
+    };
+
+    let upstream_resp = match st
+        .client
+        .chat_completions(&token, up_body, &run_id, None)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "type": "error", "error": { "type": "api_error", "message": e.to_string() } })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = upstream_resp.status();
+    let mut builder = Response::builder().status(status);
+    for (k, v) in upstream_resp.headers() {
+        if k != "content-length" && k != "transfer-encoding" {
+            builder = builder.header(k, v);
+        }
+    }
+    builder
+        .body(Body::from_stream(upstream_resp.bytes_stream()))
+        .unwrap()
+        .into_response()
+}
+
+// ---------- 工具 ----------
+
+fn authorized(headers: &HeaderMap, keys: &[String]) -> bool {
+    let extract = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    if let Some(k) = extract("x-api-key") {
+        if keys.contains(&k) {
+            return true;
+        }
+    }
+    if let Some(auth) = extract("authorization") {
+        let bearer = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+            .map(|s| s.to_string());
+        if let Some(k) = bearer {
+            return keys.contains(&k);
+        }
+    }
+    false
+}
+
+/// 上游不强需的字段预处理（去掉 stream 外的自定义字段避免污染）
+fn remove_passthrough_fields(body: &mut serde_json::Value) {
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("stream_options");
+    }
+}

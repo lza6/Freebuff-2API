@@ -1,0 +1,28 @@
+# run_manager.go
+
+- RunManager · struct · L14-L22 — RunManager
+- tokenPool · struct · L24-L39 — tokenPool
+- managedRun · struct · L41-L48 — managedRun
+- runLease · struct · L50-L53 — runLease
+- tokenSnapshot · struct · L55-L67 — tokenSnapshot
+- runSnapshot · struct · L69-L75 — runSnapshot
+- waitingRoomError · struct · L77-L82 — waitingRoomError
+- Error · method · L84-L104 — func (e *waitingRoomError) Error() string
+- NewRunManager · function · L106-L125 — func NewRunManager(cfg Config, client *UpstreamClient, logger *log.Logger) *RunManager
+- Start · method · L127-L152 — func (m *RunManager) Start(ctx context.Context, agentIDs []string)
+- prewarm · method · L154-L169 — func (m *RunManager) prewarm()
+- Close · method · L171-L179 — func (m *RunManager) Close(ctx context.Context)
+- Acquire · method · L181-L215 — func (m *RunManager) Acquire(ctx context.Context, agentID string) (*runLease, error)
+- Release · method · L217-L222 — func (m *RunManager) Release(lease *runLease)
+- Invalidate · method · L224-L229 — func (m *RunManager) Invalidate(lease *runLease, reason string)
+- Cooldown · method · L231-L236 — func (m *RunManager) Cooldown(lease *runLease, duration time.Duration, reason string)
+- Snapshots · method · L238-L244 — func (m *RunManager) Snapshots() []tokenSnapshot
+- acquire · method · L246-L288 — func (p *tokenPool) acquire(ctx context.Context, agentID string) (*runLease, error)
+- maintain · method · L290-L324 — func (p *tokenPool) maintain(ctx context.Context) error
+- shutdown · method · L326-L354 — func (p *tokenPool) shutdown(ctx context.Context) error
+- rotateAgent · method · L356-L406 — func (p *tokenPool) rotateAgent(ctx context.Context, agentID string) error
+- release · method · L408-L422 — func (p *tokenPool) release(run *managedRun)
+- finishIfReady · method · L424-L464 — func (p *tokenPool) finishIfReady(run *managedRun) error
+- invalidate · method · L466-L489 — func (p *tokenPool) invalidate(run *managedRun, reason string)
+- markCooldown · method · L491-L501 — func (p *tokenPool) markCooldown(duration time.Duration, reason string)
+- snapshot · method · L503-L540 — func (p *tokenPool) snapshot() tokenSnapshot

@@ -15,8 +15,11 @@
 pub mod ads;
 pub mod api;
 pub mod config;
+pub mod errors;
 pub mod import;
 pub mod logbus;
+pub mod mcp;
+pub mod memory;
 pub mod models;
 pub mod pool;
 pub mod prompts;

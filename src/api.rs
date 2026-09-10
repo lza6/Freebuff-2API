@@ -39,6 +39,7 @@ pub struct AppState {
     pub usage: Arc<UsageDb>,
     pub telemetry: Arc<TelemetryWriter>,
     pub logs: Arc<LogBus>,
+    pub memory: Arc<crate::memory::MemoryStore>,
     pub skills: Arc<SkillsManager>,
     pub ads: Arc<AdRefresher>,
     pub prompts: Arc<crate::prompts::PromptManager>,
@@ -88,6 +89,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/usage/requests", get(handle_usage_requests))
         .route("/api/usage/requests/{id}", get(handle_usage_request_detail))
         .route("/api/usage/models", get(handle_usage_models))
+        .route("/api/usage/cost", get(handle_usage_cost))
         .route("/api/usage/accounts", get(handle_accounts))
         .route("/api/skills", get(handle_skills_list).post(handle_skills_upsert))
         .route("/api/skills/toggle", post(handle_skills_toggle))
@@ -95,6 +97,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/skills/gate", post(handle_skills_gate))
         .route("/api/logs/recent", get(handle_logs_recent))
         .route("/api/logs/stream", get(handle_logs_stream))
+        .route("/api/memory", get(handle_memory_list).post(handle_memory_upsert))
+        .route("/api/memory/delete", post(handle_memory_delete))
+        .route("/api/memory/static", post(handle_memory_static))
+        .route("/mcp", post(handle_mcp))
         .route("/api/doctor", get(handle_doctor));
 
     Router::new()
@@ -289,8 +295,8 @@ async fn handle_prompts_list(State(st): State<AppState>, headers: HeaderMap) -> 
 
 /// POST /api/prompts/toggle — body: { type: "prompt"|"skill", id, enabled }
 async fn handle_prompts_toggle(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    if !admin_authorized(&headers, &st) {
-        return admin_denied();
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
     }
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -515,8 +521,8 @@ async fn handle_accounts(State(st): State<AppState>, headers: HeaderMap) -> Resp
 
 /// POST /api/tokens/import — body 传 curl 命令文本或 HAR JSON，自动提取 Bearer token 入库
 async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    if !admin_authorized(&headers, &st) {
-        return admin_denied();
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
     }
     let raw = match std::str::from_utf8(&body) {
         Ok(t) => t,
@@ -572,7 +578,7 @@ async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, bod
                             (*st.cfg).clone(),
                         )),
                         score: tokio::sync::RwLock::new(0.0),
-                        cooldown_until: tokio::sync::RwLock::new(None),
+                        breaker: tokio::sync::RwLock::new(crate::pool::CircuitBreaker::new()),
                     }
                 })
                 .collect();
@@ -729,120 +735,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     // 模型路由降级
     let model = st.router.resolve(&requested).await;
 
-    // 挑 token
-    let account = match st.pool.pick_best().await {
-        Some(a) => a,
-        None => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": { "message": "no healthy upstream auth token available", "type": "server_error" } })),
-            )
-                .into_response();
-        }
-    };
-    let account_name = account.name.clone();
-    let token = account.token.clone();
-    st.telemetry.event(&req_id, "route", &format!("{requested} -> {model} via {account_name}"));
-
-    // 确保会话
-    let instance_id = match account.session.ensure_session(&model).await {
-        Ok(id) => Some(id),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.starts_with("waiting_room_queued") {
-                st.usage
-                    .record_ex(&account_name, &model, 0, 0, 0, 429, "", "", &req_id)
-                    .ok();
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(serde_json::json!({ "error": { "message": msg, "type": "server_error", "code": "waiting_room_queued" } })),
-                )
-                    .into_response();
-            }
-            st.pool
-                .update_score(&account_name, -30.0)
-                .await;
-            st.usage
-                .record_ex(&account_name, &model, 0, 0, 0, 502, "", "", &req_id)
-                .ok();
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": { "message": format!("failed to acquire free session: {msg}"), "type": "server_error" } })),
-            )
-                .into_response();
-        }
-    };
-
-    // run 管理：取根 run（惰性）
-    let run_id = match ensure_root_run(&st, &account_name, &token).await {
-        Ok(id) => id,
-        Err(e) => {
-            st.usage
-                .record_ex(&account_name, &model, 0, 0, 0, 502, "", "", &req_id)
-                .ok();
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": { "message": format!("create run failed: {e}"), "type": "server_error" } })),
-            )
-                .into_response();
-        }
-    };
-
-    // 配置上行 body：设 model + 思考程度降级/剥离 + 内置提示词/技能注入 + codebuff_metadata 注入
-    let mut up_body = parsed.clone();
-    up_body["model"] = serde_json::json!(model);
-    // 内置提示词 + 技能注入（system 消息前插）
-    // roster 模式：提示词走 prompts（base+启用项），技能走 skills 模块（只注入名称+描述）
-    let sys_prefix = build_system_prefix(&st).await;
-    if !sys_prefix.trim().is_empty() {
-        if let Some(messages) = up_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-            messages.insert(0, serde_json::json!({ "role": "system", "content": sys_prefix }));
-        }
-    }
-    if let Some(effort) = up_body.get("reasoning_effort").and_then(|v| v.as_str()) {
-        match st.router.clamp_effort(&model, effort) {
-            Some(clamped) => {
-                if clamped != effort {
-                    tracing::debug!("模型 {model} effort {effort} 降级为 {clamped}");
-                    up_body["reasoning_effort"] = serde_json::json!(clamped);
-                }
-            }
-            None => {
-                tracing::debug!("模型 {model} 不支持 reasoning_effort，自动剥离");
-                if let Some(obj) = up_body.as_object_mut() {
-                    obj.remove("reasoning_effort");
-                }
-            }
-        }
-    }
-    remove_passthrough_fields(&mut up_body);
-    // 流式请求：向上游显式申请 usage 帧（真实 token 统计所需；非流式响应本身含 usage）
-    if up_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false) {
-        up_body["stream_options"] = serde_json::json!({ "include_usage": true });
-    }
-
-    // 转发上游
-    let upstream_resp = match st
-        .client
-        .chat_completions(&token, up_body.clone(), &run_id, instance_id.as_deref())
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            st.pool.update_score(&account_name, -40.0).await;
-            let msg = e.to_string();
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": { "message": msg, "type": "server_error" } })),
-            )
-                .into_response();
-        }
-    };
-
-    let status = upstream_resp.status();
-    let latency_ms = start.elapsed().as_millis() as i64;
-
-    // 用量记录（api_key 脱敏后入库，防止明文凭据落盘）
+    // 用量记录字段（api_key 脱敏；提前计算供重试路径复用）
     let api_key = headers
         .get("x-api-key")
         .or_else(|| headers.get("authorization"))
@@ -855,8 +748,252 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         .map(|s| s.split(',').next().unwrap_or("").to_string())
         .unwrap_or_default();
 
+    // 配置上行 body：设 model + 思考程度降级/剥离 + 提示词/技能注入（与账号无关，重试时复用）
+    let mut up_body = parsed.clone();
+    up_body["model"] = serde_json::json!(model);
+    // 记忆检索 query：最后一条 user 消息（截断 200 字符）
+    let mem_query: String = up_body
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .and_then(|m| m.get("content"))
+                .map(|c| match c {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+        })
+        .unwrap_or_default()
+        .chars()
+        .take(200)
+        .collect();
+    // 内置提示词 + 技能 roster + 记忆注入（system 消息前插）
+    // roster 模式：提示词走 prompts（base+启用项），技能走 skills 模块（只注入名称+描述）
+    let sys_prefix = build_system_prefix(&st, &mem_query).await;
+    if !sys_prefix.trim().is_empty() {
+        if let Some(messages) = up_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            messages.insert(0, serde_json::json!({ "role": "system", "content": sys_prefix }));
+        }
+    }
+    let mut effort_downgraded: Option<String> = None;
+    if let Some(effort) = up_body.get("reasoning_effort").and_then(|v| v.as_str()) {
+        match st.router.clamp_effort(&model, effort) {
+            Some(clamped) => {
+                if clamped != effort {
+                    tracing::debug!("模型 {model} effort {effort} 降级为 {clamped}");
+                    effort_downgraded = Some(clamped.clone());
+                    up_body["reasoning_effort"] = serde_json::json!(clamped);
+                }
+            }
+            None => {
+                tracing::debug!("模型 {model} 不支持 reasoning_effort，自动剥离");
+                if let Some(obj) = up_body.as_object_mut() {
+                    obj.remove("reasoning_effort");
+                }
+            }
+        }
+    }
+    remove_passthrough_fields(&mut up_body);
+    // token_saver（可选）：压缩超长 tool 结果（只处理 tool 角色消息，绝不触碰 system 前缀与历史头部）
+    if st.cfg.token_saver {
+        if let Some(msgs) = up_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            for m in msgs.iter_mut() {
+                if m.get("role").and_then(|r| r.as_str()) != Some("tool") {
+                    continue;
+                }
+                let long: Option<String> = m
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| c.len() > 8000)
+                    .map(|s| s.to_string());
+                if let Some(c) = long {
+                    m["content"] = serde_json::json!(crate::router::compress_tool_result(&c, 8000));
+                }
+            }
+        }
+    }
+    // 流式请求：向上游显式申请 usage 帧（真实 token 统计所需；非流式响应本身含 usage）
+    if up_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false) {
+        up_body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
+
+    // 请求级重试循环：失败换号重试。
+    // 此时尚未向客户端写出任何字节，天然满足 committed 边界（首字节后绝不重试）。
+    let retry_policy = crate::retry::RetryPolicy::default();
+    let mut account_name = String::new();
+    let mut token = String::new();
+    let mut run_id = String::new();
+    let mut attempt_count = 0usize;
+    let mut last_error = String::new();
+    let mut last_status: u16 = 502;
+    let mut upstream_resp: Option<reqwest::Response> = None;
+
+    for attempt in 0..retry_policy.max_attempts {
+        attempt_count = attempt + 1;
+        // 挑 token（每次重试重新选号；熔断 Open 的账号会被跳过）
+        let account = match st.pool.pick_best().await {
+            Some(a) => a,
+            None => {
+                if attempt == 0 {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "error": { "message": "no healthy upstream auth token available", "type": "server_error" } })),
+                    )
+                        .into_response();
+                }
+                last_error = "no healthy upstream auth token available".into();
+                break;
+            }
+        };
+        account_name = account.name.clone();
+        token = account.token.clone();
+        if attempt == 0 {
+            st.telemetry.event(&req_id, "route", &format!("{requested} -> {model} via {account_name}"));
+        } else {
+            st.telemetry.event(&req_id, "retry", &format!("第 {} 次尝试 via {account_name}", attempt + 1));
+            st.logs.emit("warn", "retry", Some(&req_id), format!("换号重试（第 {} 次）→ {account_name}", attempt + 1));
+        }
+
+        // 确保会话
+        let instance_id = match account.session.ensure_session(&model).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.starts_with("waiting_room_queued") {
+                    st.usage.record_ex(&account_name, &model, 0, 0, 0, 429, "", "", &req_id).ok();
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({ "error": { "message": msg, "type": "server_error", "code": "waiting_room_queued" } })),
+                    )
+                        .into_response();
+                }
+                st.pool.mark_failure(&account_name, &format!("session: {msg}")).await;
+                st.pool.update_score(&account_name, -30.0).await;
+                last_status = 502;
+                last_error = format!("failed to acquire free session: {msg}");
+                continue;
+            }
+        };
+
+        // run 管理：取根 run（惰性）
+        let rid = match ensure_root_run(&st, &account_name, &token).await {
+            Ok(id) => id,
+            Err(e) => {
+                st.pool.mark_failure(&account_name, "run").await;
+                last_status = 502;
+                last_error = format!("create run failed: {e}");
+                continue;
+            }
+        };
+        run_id = rid;
+
+        // 调上游
+        match st
+            .client
+            .chat_completions(&token, up_body.clone(), &run_id, instance_id.as_deref())
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                upstream_resp = Some(r);
+                break;
+            }
+            Ok(r) => {
+                let code = r.status().as_u16();
+                let body_text = r.text().await.unwrap_or_default();
+                // 错误分类：文本规则优先（waiting_room/rate_limit/model_unavailable...），状态码兜底
+                let kind = crate::errors::classify(code, &body_text);
+                st.pool.mark_failure(&account_name, &format!("HTTP {code}")).await;
+                st.pool.update_score(&account_name, -20.0).await;
+                if code == 401 || code == 403 {
+                    st.pool
+                        .mark_cooldown(&account_name, std::time::Duration::from_secs(600), &format!("上游 {code}，token 疑似失效"))
+                        .await;
+                }
+                last_status = code;
+                last_error = format!("upstream HTTP {code} ({}): {}", kind.as_str(), crate::errors::error_excerpt(&body_text));
+                // 换号判定：可重试错误（限流/排队/5xx/网络）+ 凭证失效（401/403 已冷却，换号继续）都换号
+                let should_switch = kind.is_retryable()
+                    || matches!(kind, crate::errors::ErrorKind::AuthExpired);
+                if should_switch && attempt + 1 < retry_policy.max_attempts {
+                    st.telemetry.event(&req_id, "retry_scheduled", &format!("HTTP {code}（{}），换号重试", kind.as_str()));
+                    continue;
+                }
+                break;
+            }
+            Err(e) => {
+                st.pool.mark_failure(&account_name, "network").await;
+                st.pool.update_score(&account_name, -40.0).await;
+                last_status = 502;
+                last_error = e.to_string();
+                continue;
+            }
+        }
+    }
+
+    // 全部尝试失败：记录并返回汇总错误
+    let upstream_resp = match upstream_resp {
+        Some(r) => r,
+        None => {
+            let latency = start.elapsed().as_millis() as i64;
+            st.usage.record_ex(&account_name, &model, 0, 0, latency, last_status as i64, "", "", &req_id).ok();
+            st.telemetry.record(TraceRow {
+                req_id: req_id.clone(),
+                endpoint: "/v1/chat/completions".into(),
+                requested_model: requested.clone(),
+                resolved_model: model.clone(),
+                account: account_name.clone(),
+                status: last_status,
+                latency_ms: latency as u64,
+                ttft_ms: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stream: false,
+                error_kind: Some(crate::errors::classify(last_status, &last_error).as_str().to_string()),
+                error_excerpt: Some(last_error.chars().take(300).collect()),
+                route_reason: Some(format!("{} -> {}（{} 次尝试均失败）", requested, model, attempt_count)),
+                api_key: Some(api_key.clone()),
+                client_ip: Some(client_ip.clone()),
+            });
+            st.logs
+                .emit("error", "request", Some(&req_id), format!("{model} 全部 {attempt_count} 次尝试失败: {}", last_error.chars().take(120).collect::<String>()));
+            // 有上游 HTTP 响应（非网络类失败）：透传上游状态码，保持客户端重试/退避语义
+            if (400..600).contains(&last_status) {
+                return (
+                    StatusCode::from_u16(last_status).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": last_error,
+                            "type": "upstream_error",
+                            "code": last_status,
+                            "model": model,
+                            "upstream": st.client.base_url(),
+                            "attempts": attempt_count,
+                        }
+                    })),
+                )
+                    .into_response();
+            }
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": { "message": format!("all {attempt_count} attempts failed: {last_error}"), "type": "server_error" } })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = upstream_resp.status();
+    let latency_ms = start.elapsed().as_millis() as i64;
+    // （api_key / client_ip 已在重试循环前计算）
+    // 观察（零 LLM）：模型使用偏好 / 档位降级 / 用户纠正信号 → 记忆库（可配置关闭）
+    if st.cfg.memory_enabled {
+        let _ = st.memory.observe(&model, effort_downgraded.as_deref(), &mem_query, None);
+    }
+
     if status.is_success() {
         st.pool.update_score(&account_name, 10.0).await;
+        st.pool.mark_success(&account_name).await; // 熔断器：驱动 HalfOpen → Closed 恢复
         st.telemetry.event(&req_id, "upstream_ok", &format!("HTTP {} 建连 {}ms", status.as_u16(), latency_ms));
         // run 收尾：FINISH 上报（释放上游 run 计数；失败不影响响应）
         if let Err(e) = st.client.finish_run(&token, &run_id, 1).await {
@@ -1422,8 +1559,8 @@ async fn handle_skills_list(State(st): State<AppState>, headers: HeaderMap) -> R
 
 /// POST /api/skills — 新建/更新技能 body: { id?, name, description, body, triggers? }
 async fn handle_skills_upsert(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    if !admin_authorized(&headers, &st) {
-        return admin_denied();
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
     }
     let v: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -1467,8 +1604,8 @@ async fn handle_skills_upsert(State(st): State<AppState>, headers: HeaderMap, bo
 
 /// POST /api/skills/toggle — body: { id, enabled }
 async fn handle_skills_toggle(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    if !admin_authorized(&headers, &st) {
-        return admin_denied();
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
     }
     let v: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -1484,8 +1621,8 @@ async fn handle_skills_toggle(State(st): State<AppState>, headers: HeaderMap, bo
 
 /// POST /api/skills/delete — body: { id }
 async fn handle_skills_delete(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    if !admin_authorized(&headers, &st) {
-        return admin_denied();
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
     }
     let v: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -1661,6 +1798,208 @@ fn read_telemetry_request(db_path: &str, req_id: &str) -> Option<serde_json::Val
     rows.next().and_then(|r| r.ok())
 }
 
+/// GET /api/usage/cost — 速率与错误率（免费层无货币成本；诚实标注 estimated）
+async fn handle_usage_cost(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let recent = match st.usage.recent_requests(500) {
+        Ok(v) => v,
+        Err(e) => return internal_err(&e),
+    };
+    let now = chrono::Utc::now();
+    let mut requests_30m = 0i64;
+    let mut errors_30m = 0i64;
+    let mut total_ms = 0i64;
+    for r in &recent {
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&r.ts) {
+            let age_min = now
+                .signed_duration_since(ts.with_timezone(&chrono::Utc))
+                .num_minutes();
+            if (0..=30).contains(&age_min) {
+                requests_30m += 1;
+                if r.status >= 400 {
+                    errors_30m += 1;
+                }
+                total_ms += r.latency_ms;
+            }
+        }
+    }
+    let totals = st.usage.totals().unwrap_or_else(|_| serde_json::json!({}));
+    Json(serde_json::json!({
+        "ok": true,
+        "window_minutes": 30,
+        "requests_30m": requests_30m,
+        "errors_30m": errors_30m,
+        "error_rate_30m": if requests_30m > 0 { errors_30m as f64 / requests_30m as f64 } else { 0.0 },
+        "avg_latency_ms_30m": if requests_30m > 0 { total_ms / requests_30m } else { 0 },
+        "requests_per_hour": requests_30m * 2,
+        "totals": totals,
+        "estimated": true,
+        "cost_source": "免费层（无货币成本记录）",
+    }))
+    .into_response()
+}
+
+/// 写端点 CSRF 防护：要求 `application/json`。
+/// 跨站表单只能发送 text/plain / urlencoded / multipart（浏览器"简单请求"，无需预检）；
+/// 强制 JSON 会让浏览器先发预检，从而挡住 CSRF 写入。
+fn json_write_ok(headers: &HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_ascii_lowercase().starts_with("application/json"))
+        .unwrap_or(false)
+}
+
+/// 写端点统一守卫：鉴权 + JSON content-type
+fn write_guard(headers: &HeaderMap, st: &AppState) -> Option<Response> {
+    if !admin_authorized(headers, st) {
+        return Some(admin_denied());
+    }
+    if !json_write_ok(headers) {
+        return Some(bad_req("写操作要求 content-type: application/json（CSRF 防护）"));
+    }
+    None
+}
+
+// ---------- 记忆 API ----------
+/// GET /api/memory — 记忆列表 + 统计
+async fn handle_memory_list(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let memories = st.memory.list(200);
+    let stats = st.memory.stats().unwrap_or_else(|_| serde_json::json!({}));
+    Json(serde_json::json!({ "ok": true, "memories": memories, "stats": stats })).into_response()
+}
+
+/// POST /api/memory — 手动新增记忆 body: {kind, title, content, is_static?}
+async fn handle_memory_upsert(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("preference");
+    let title: String = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(200)
+        .collect();
+    let content: String = v
+        .get("content")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(4000)
+        .collect();
+    let is_static = v.get("is_static").and_then(|x| x.as_bool()).unwrap_or(false);
+    if title.is_empty() || content.trim().is_empty() {
+        return bad_req("title 和 content 不能为空");
+    }
+    match st.memory.upsert(kind, &title, &content, is_static) {
+        Ok(m) => {
+            st.logs.emit("info", "memory", None, format!("记忆已保存: {}", m.title));
+            Json(serde_json::json!({ "ok": true, "memory": m })).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/memory/delete — body: {id}
+async fn handle_memory_delete(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+    match st.memory.delete(id) {
+        Ok(ok) => Json(serde_json::json!({ "ok": ok, "id": id })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/memory/static — body: {id, is_static}
+async fn handle_memory_static(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+    let is_static = v.get("is_static").and_then(|x| x.as_bool()).unwrap_or(false);
+    match st.memory.set_static(id, is_static) {
+        Ok(ok) => Json(serde_json::json!({ "ok": ok, "id": id, "is_static": is_static })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+// ---------- MCP（只读工具） ----------
+
+/// POST /mcp — MCP JSON-RPC 2.0 端点（tools/list + tools/call，仅只读 3 工具）
+async fn handle_mcp(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    // 与 /v1 一致的网关鉴权：配置 api_keys 时校验；未配置时仅本机
+    if !origin_allowed(&headers) {
+        return admin_denied();
+    }
+    if !st.cfg.api_keys.is_empty() {
+        if !authorized(&headers, &st.cfg.api_keys) {
+            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": { "message": "invalid proxy api key" } }))).into_response();
+        }
+    } else if !is_loopback_request(&headers) {
+        return admin_denied();
+    }
+    let raw = String::from_utf8_lossy(&body).to_string();
+    let snapshot = build_mcp_snapshot(&st).await;
+    match crate::mcp::handle_json(&raw, &snapshot) {
+        Some(resp) => Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(resp))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        None => StatusCode::ACCEPTED.into_response(), // notification：无响应体
+    }
+}
+
+/// 组装 MCP 数据快照（从 AppState 拉取只读数据）
+async fn build_mcp_snapshot(st: &AppState) -> crate::mcp::GatewaySnapshot {
+    let models = st.registry.models().await;
+    let pool_snap = st.pool.snapshot().await;
+    let accounts = pool_snap
+        .accounts
+        .iter()
+        .map(|a| crate::mcp::AccountBrief {
+            name: a.name.clone(),
+            healthy: a.healthy,
+            score: a.score,
+            session_status: a
+                .session
+                .as_ref()
+                .map(|s| format!("{:?}", s.status))
+                .unwrap_or_else(|| "unknown".into()),
+        })
+        .collect();
+    let usage = st.usage.totals().unwrap_or_else(|_| serde_json::json!({}));
+    crate::mcp::GatewaySnapshot {
+        models,
+        accounts,
+        usage_totals: usage,
+        version: env!("CARGO_PKG_VERSION").into(),
+        uptime_sec: st.started.elapsed().as_secs(),
+    }
+}
+
 // ---------- 系统体检 ----------
 
 /// GET /api/doctor — 逐项检查（四态：ok / fault / unknown / fact；"未检查"就是未检查）
@@ -1717,7 +2056,18 @@ async fn handle_doctor(State(st): State<AppState>, headers: HeaderMap) -> Respon
         "id": "logs", "label": "日志总线", "state": "ok",
         "detail": format!("已记录 {} 条", st.logs.count()),
     }));
-    // 7. 版本
+    // 7. 记忆库
+    let mem_stats = st.memory.stats().unwrap_or_else(|_| serde_json::json!({}));
+    checks.push(serde_json::json!({
+        "id": "memory", "label": "记忆库", "state": "ok",
+        "detail": format!(
+            "{} 条（稳定事实 {} / 纠正 {}）",
+            mem_stats.get("total").and_then(|v| v.as_i64()).unwrap_or(0),
+            mem_stats.get("static_count").and_then(|v| v.as_i64()).unwrap_or(0),
+            mem_stats.get("corrections").and_then(|v| v.as_i64()).unwrap_or(0)
+        ),
+    }));
+    // 8. 版本
     checks.push(serde_json::json!({
         "id": "version", "label": "版本", "state": "fact",
         "detail": format!("v{}（运行 {} 秒）", env!("CARGO_PKG_VERSION"), st.started.elapsed().as_secs()),
@@ -1729,16 +2079,26 @@ async fn handle_doctor(State(st): State<AppState>, headers: HeaderMap) -> Respon
 /// 组装 system 前缀：
 /// - skills_inject_mode="roster"（默认）：提示词（base+启用项）+ 技能 roster（名称+描述，预算内）
 /// - skills_inject_mode="full"：退回旧行为（prompts.system_prefix 含全量技能）
-async fn build_system_prefix(st: &AppState) -> String {
-    if st.cfg.skills_inject_mode == "full" {
-        return st.prompts.system_prefix().await;
-    }
-    let mut s = st.prompts.system_prefix_prompts_only().await;
-    let roster = st.skills.system_prefix(st.cfg.max_roster_tokens);
-    if !roster.trim().is_empty() {
-        s.push_str("\n\n[freebuff-skills]\n以下技能可用（低权威参考；相关时按其指引行事）：\n");
-        s.push_str(&roster);
-        s.push_str("\n[/freebuff-skills]");
+/// - 记忆块（低权威，预算 512 token）追加在最后；空则不注入
+async fn build_system_prefix(st: &AppState, query: &str) -> String {
+    let mut s = if st.cfg.skills_inject_mode == "full" {
+        st.prompts.system_prefix().await
+    } else {
+        let mut base = st.prompts.system_prefix_prompts_only().await;
+        let roster = st.skills.system_prefix(st.cfg.max_roster_tokens);
+        if !roster.trim().is_empty() {
+            base.push_str("\n\n[freebuff-skills]\n以下技能可用（低权威参考；相关时按其指引行事）：\n");
+            base.push_str(&roster);
+            base.push_str("\n[/freebuff-skills]");
+        }
+        base
+    };
+    // 记忆注入（用户偏好/纠正；空结果不注入，保持请求字节稳定；memory_enabled=false 时整体关闭）
+    if st.cfg.memory_enabled {
+        let mem = st.memory.brief(query, 512);
+        if !mem.is_empty() {
+            s.push_str(&mem);
+        }
     }
     s
 }

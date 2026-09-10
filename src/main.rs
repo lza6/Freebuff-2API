@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     if let Ok((added, removed)) = registry.refresh_from_upstream(&client_http()).await {
         tracing::info!("模型注册表同步：新增 {added} 个，移除 {removed} 个");
     }
-    let router = Arc::new(ModelRouter::new(registry.clone(), RouterConfig::default()));
+    let router = Arc::new(ModelRouter::new(registry.clone(), RouterConfig::from_app_config(&cfg)));
 
     // 多账号池
     let pool = Arc::new(Pool::new(&cfg, client.clone()));
@@ -64,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 实时日志总线（SSE 广播 + 环形缓冲）
     let logs = Arc::new(LogBus::new(500));
+
+    // 记忆层（用户偏好/纠正；零 LLM 规则 observe）
+    let memory = Arc::new(freebuff2api::memory::MemoryStore::open(PathBuf::from(&cfg.memory_path))?);
+    tracing::info!("记忆库 SQLite: {}", cfg.memory_path);
 
     // 技能系统（文件为真相源 + SQLite 索引；旧 prompts 保留兼容）
     // 注意：不用 with_extension（目录名含 '.' 时会被截断，如 data/my.skills → data/my.sqlite）
@@ -96,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
         usage,
         telemetry,
         logs,
+        memory,
         skills,
         ads,
         prompts,

@@ -30,6 +30,17 @@ impl Default for RouterConfig {
     }
 }
 
+impl RouterConfig {
+    /// 从全局配置构造：用户配置了 fallback_models 时优先使用（此前该配置解析后零消费）
+    pub fn from_app_config(cfg: &crate::config::Config) -> Self {
+        let mut rc = Self::default();
+        if !cfg.fallback_models.is_empty() {
+            rc.fallback_chain = cfg.fallback_models.clone();
+        }
+        rc
+    }
+}
+
 pub struct ModelRouter {
     pub config: RouterConfig,
     pub registry: Arc<ModelRegistry>,
@@ -108,16 +119,28 @@ impl ModelRouter {
 }
 
 /// 超长 tool_result 压缩（token 节省核心）
+/// 注意：按字符边界切分——中文字符串上按字节切片会 panic（与 api.rs tail_keep 同类问题）
 pub fn compress_tool_result(content: &str, max_chars: usize) -> String {
     if content.len() <= max_chars {
         return content.to_string();
     }
-    let head = &content[..max_chars / 2];
-    let tail = &content[content.len() - max_chars / 2..];
+    let keep = max_chars / 2;
+    // 头部：从 keep 处向前回退到字符边界
+    let mut head_end = keep.min(content.len());
+    while head_end > 0 && !content.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    // 尾部：从 len-keep 处向后推进到字符边界
+    let mut tail_start = content.len() - keep;
+    while tail_start < content.len() && !content.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
     format!(
-        "{head}\n\n[... 已压缩: 原始 {} 字符，保留首尾 {} 字符 ...]\n\n{tail}",
+        "{}\n\n[... 已压缩: 原始 {} 字符，保留首尾 {} 字符 ...]\n\n{}",
+        &content[..head_end],
         content.len(),
-        max_chars
+        max_chars,
+        &content[tail_start..]
     )
 }
 
@@ -197,5 +220,18 @@ mod tests {
         assert!(out.len() < 1000);
         assert!(out.contains("已压缩"));
         assert!(out.starts_with("aaa"));
+    }
+
+    #[test]
+    fn compress_multibyte_content_does_not_panic() {
+        // 回归：中文内容按字节切片会触发 char boundary panic
+        let s = "中文内容".repeat(500);
+        let out = compress_tool_result(&s, 1000);
+        assert!(out.contains("已压缩"));
+        assert!(out.starts_with("中文"));
+        // emoji（4 字节字符）同样安全
+        let e = "🎉".repeat(300);
+        let out2 = compress_tool_result(&e, 500);
+        assert!(out2.contains("已压缩"));
     }
 }

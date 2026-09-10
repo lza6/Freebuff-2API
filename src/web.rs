@@ -85,11 +85,14 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
 <main>
   <div id="banner"></div>
   <div class="cards" id="cards"></div>
+  <div id="cost-line" style="font-size:13px;color:var(--muted);margin:-8px 0 16px 2px"></div>
   <nav>
     <button data-tab="overview" class="active" onclick="showTab('overview')">总览</button>
     <button data-tab="account" onclick="showTab('account')">账号</button>
     <button data-tab="skills" onclick="showTab('skills')">技能</button>
+    <button data-tab="memory" onclick="showTab('memory')">记忆</button>
     <button data-tab="logs" onclick="showTab('logs')">实时日志</button>
+    <button data-tab="teach" onclick="showTab('teach')">原理</button>
     <button data-tab="doctor" onclick="showTab('doctor')">系统体检</button>
     <button data-tab="guide" onclick="showTab('guide')">接入指南</button>
   </nav>
@@ -152,6 +155,69 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
         <span id="skill-save-result" style="font-size:13px;color:var(--muted)"></span>
       </div>
       <details style="margin-top:10px"><summary>质量门检查（保存前会提示问题）</summary><div id="gate-result" style="font-size:13px;color:var(--muted);margin-top:6px"></div></details>
+    </div>
+  </section>
+
+  <section id="tab-memory" style="display:none">
+    <div class="panel">
+      <h2>记忆库 <span style="font-weight:400;color:var(--muted);font-size:12px">（AI 从这里学习你的偏好与纠正；零 LLM 规则记录，纯本地）</span></h2>
+      <div id="mem-stats" style="margin-bottom:10px;font-size:13px;color:var(--muted)"></div>
+      <div class="row" style="margin-bottom:10px">
+        <button onclick="newMemory()">＋ 手动添加</button>
+        <span style="font-size:12px;color:var(--muted)">自动记录：常用模型 / 推理档位降级 / 你的纠正（"记住…"、"别再…"、"always/never"）</span>
+      </div>
+      <div id="mem-editor" style="display:none;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+        <label>类型</label>
+        <select id="mem-kind">
+          <option value="preference">偏好</option><option value="correction">纠正</option>
+          <option value="habit">习惯</option><option value="project">项目</option><option value="feedback">反馈</option>
+        </select>
+        <label>标题</label><input id="mem-title" placeholder="例如：偏好中文回答 / 常用模型 glm-5.3-flash">
+        <label>内容</label><textarea id="mem-content" style="min-height:80px" placeholder="具体内容（相关对话时会注入 system 前缀，低权威）"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button onclick="saveMemory()">保存</button>
+          <button class="ghost" onclick="document.getElementById('mem-editor').style.display='none'">取消</button>
+          <span id="mem-save-result" style="font-size:13px;color:var(--muted)"></span>
+        </div>
+      </div>
+      <div id="mem-wrap"></div>
+    </div>
+  </section>
+
+  <section id="tab-teach" style="display:none">
+    <div class="panel">
+      <h2>原理速览 <span style="font-weight:400;color:var(--muted);font-size:12px">（这个网关背后发生了什么）</span></h2>
+      <details open><summary><b>① 请求进来之后</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        客户端（Claude Code / Cursor）把 OpenAI 或 Claude 格式的请求发到本地 <code>47821</code> 端口。
+        网关先解析模型名 → 从账号池挑健康账号（评分 + 熔断状态）→ 确保该账号在上游有活跃会话
+        → 把请求改写为上游格式（注入 run 元数据、按模型校正思考档位、拼上提示词/技能/记忆）
+        → 转发上游，再把响应（流式）实时转回客户端格式。</p></details>
+      <details><summary><b>② 多账号是怎么"轮询"的</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        每个账号有独立的健康分与熔断器（Closed / Open / HalfOpen 三态）：连续失败 4 次自动断开，
+        冷却随断开次数指数增长（封顶 10 分钟）；冷却结束进入半开状态放行探测，连续成功 2 次恢复。
+        请求失败会自动换号重试（最多 3 次）——但只在"尚未向客户端写出任何字节"之前重试，
+        绝不会把半截响应写给你。</p></details>
+      <details><summary><b>③ 提示词 / 技能 / 记忆是怎么注入的</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        注入顺序：基础提示词 → 启用的提示词 → 技能 roster（名称+描述）→ 记忆块（低权威），
+        拼成一条 system 消息放最前面。技能与记忆有严格预算（默认 2000 / 512 token），超出整条丢弃，
+        避免"越装越贵"。记忆按你当前的问题检索（本地 trigram 全文索引，支持中文）。</p></details>
+      <details><summary><b>④ 黑匣子：为什么这次慢 / 为什么失败</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        每次请求都记录：路由决策（请求模型→实际模型→账号）、上游状态码、首字节时间、总耗时、token 用量、
+        错误类型与片段。在「总览 → 最近请求」点任意一行看细节与人话解释；「实时日志」页实时推送
+        正在发生的事（断线自动补发）。</p></details>
+      <details><summary><b>⑤ 免费额度与广告保活</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        上游免费层通过"会话 + 广告刷新"维持额度：网关每 45 秒心跳，会话剩余不足时触发广告刷新延长。
+        出现 <code>waiting_room_queued</code> 表示上游在排队——不是网关故障，稍等重试或多加账号提升并发。</p></details>
+      <details><summary><b>⑥ 数据都存在哪</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        全部本地：<code>data/freebuff2api.sqlite</code>（用量）、<code>data/telemetry.sqlite</code>（请求详情）、
+        <code>data/memory.sqlite</code>（记忆）、<code>data/skills/</code>（技能 Markdown，真相源）、
+        <code>data/tokens.json</code>（凭证）。备份或整体删除即可重置。</p></details>
     </div>
   </section>
 
@@ -220,10 +286,11 @@ function fmtTime(ts) { try { return new Date(ts).toLocaleTimeString('zh-CN', { h
 // ---------- Tab ----------
 function showTab(name) {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  for (const t of ['overview','account','skills','logs','doctor','guide']) {
+  for (const t of ['overview','account','skills','memory','logs','teach','doctor','guide']) {
     const el = $('tab-' + t); if (el) el.style.display = (t === name) ? '' : 'none';
   }
   if (name === 'skills') refreshSkills();
+  if (name === 'memory') refreshMemory();
   if (name === 'doctor') refreshDoctor();
   if (name === 'account') { refreshTokens(); loadBalance(); }
   if (name === 'logs') initLogs();
@@ -257,6 +324,11 @@ async function refreshOverview() {
       ['账号', `${alive}/${accs.length}`],
     ];
     $('cards').innerHTML = cards.map(([l, n]) => `<div class="card"><div class="lbl">${l}</div><div class="num">${n}</div></div>`).join('');
+    // 速率与错误率（免费层无货币成本，诚实标注来源）
+    try {
+      const cost = await api('/api/usage/cost');
+      $('cost-line').innerHTML = `近 ${cost.window_minutes} 分钟：<b>${cost.requests_30m}</b> 请求 · 错误率 <b>${((cost.error_rate_30m || 0) * 100).toFixed(0)}%</b> · 平均延迟 <b>${((cost.avg_latency_ms_30m || 0) / 1000).toFixed(1)}s</b> · 约 <b>${cost.requests_per_hour}</b> 请求/小时 <span style="opacity:.7">（${esc(cost.cost_source || '')}）</span>`;
+    } catch (e) { $('cost-line').textContent = ''; }
     // 无账号引导
     if (accs.length === 0) {
       $('banner').innerHTML = `<div class="banner"><h2>👋 三步开始使用</h2><ol>
@@ -462,6 +534,54 @@ async function toggleSkill(id, enabled) {
 async function delSkill(id) {
   if (!confirm('确定删除这个技能？')) return;
   try { await api('/api/skills/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }); refreshSkills(); }
+  catch (e) { toast('删除失败: ' + e.message); }
+}
+
+// ---------- 记忆 ----------
+let memCache = [];
+function kindLabel(k) { return ({ preference: '偏好', correction: '纠正', habit: '习惯', project: '项目', feedback: '反馈' })[k] || k; }
+async function refreshMemory() {
+  try {
+    const d = await api('/api/memory');
+    const s = d.stats || {};
+    $('mem-stats').innerHTML = `共 <b>${s.total ?? 0}</b> 条 · 稳定事实 ${s.static_count ?? 0} · 纠正 ${s.corrections ?? 0}`;
+    const items = d.memories || [];
+    memCache = items;
+    $('mem-wrap').innerHTML = items.length ? `<table><thead><tr><th>类型</th><th>标题</th><th>内容</th><th>状态</th><th>操作</th></tr></thead><tbody>${
+      items.map((m, i) => `<tr>
+        <td>${esc(kindLabel(m.kind))}</td>
+        <td>${esc(m.title)}</td>
+        <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.content)}">${esc(m.content)}</td>
+        <td>${m.is_static ? badge('稳定', 'ok') : badge('近期', 'dim')}</td>
+        <td class="row">
+          <button class="ghost sm" onclick="toggleMemStaticAt(${i})">${m.is_static ? '转近期' : '转稳定'}</button>
+          <button class="ghost sm" onclick="delMemAt(${i})">删除</button>
+        </td></tr>`).join('')}</tbody></table>` : '<div class="empty">还没有记忆 — 正常使用即可自动积累，或点「手动添加」</div>';
+  } catch (e) { $('mem-wrap').innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; }
+}
+function newMemory() {
+  $('mem-editor').style.display = '';
+  $('mem-title').value = ''; $('mem-content').value = ''; $('mem-save-result').textContent = '';
+}
+async function saveMemory() {
+  const title = $('mem-title').value.trim(), content = $('mem-content').value.trim(), kind = $('mem-kind').value;
+  if (!title || !content) { toast('标题和内容不能为空'); return; }
+  try {
+    await api('/api/memory', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind, title, content, is_static: false }) });
+    $('mem-save-result').textContent = '✅ 已保存';
+    $('mem-editor').style.display = 'none';
+    refreshMemory();
+  } catch (e) { $('mem-save-result').innerHTML = `<span class="terr">保存失败：${esc(e.message)}</span>`; }
+}
+function toggleMemStaticAt(i) { const m = memCache[i]; if (m) setMemStatic(m.id, !m.is_static); }
+function delMemAt(i) { const m = memCache[i]; if (m) delMemory(m.id); }
+async function setMemStatic(id, v) {
+  try { await api('/api/memory/static', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, is_static: v }) }); refreshMemory(); }
+  catch (e) { toast('操作失败: ' + e.message); }
+}
+async function delMemory(id) {
+  if (!confirm('删除这条记忆？')) return;
+  try { await api('/api/memory/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }); refreshMemory(); }
   catch (e) { toast('删除失败: ' + e.message); }
 }
 

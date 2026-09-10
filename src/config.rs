@@ -36,6 +36,10 @@ pub struct Config {
     pub tokens_path: String,
     /// 遥测 SQLite 路径（请求详情/事件链，独立库避免写锁竞争）
     pub telemetry_path: String,
+    /// 记忆库 SQLite 路径（用户偏好/纠正；独立库）
+    pub memory_path: String,
+    /// 记忆层开关（false 时既不自动记录也不注入；隐私敏感用户可关）
+    pub memory_enabled: bool,
     /// 技能目录（技能文件真相源）
     pub skills_dir: String,
     /// 技能注入模式：roster（只注入名称+描述）| full（全量拼接）
@@ -65,6 +69,8 @@ impl Default for Config {
             sqlite_path: "data/freebuff2api.sqlite".into(),
             tokens_path: "data/tokens.json".into(),
             telemetry_path: "data/telemetry.sqlite".into(),
+            memory_path: "data/memory.sqlite".into(),
+            memory_enabled: true,
             skills_dir: "data/skills".into(),
             skills_inject_mode: "roster".into(),
             max_roster_tokens: 2000,
@@ -135,6 +141,9 @@ impl Config {
         if let Ok(v) = env::var("TELEMETRY_PATH") {
             self.telemetry_path = v;
         }
+        if let Ok(v) = env::var("MEMORY_PATH") {
+            self.memory_path = v;
+        }
         if let Ok(v) = env::var("SKILLS_DIR") {
             self.skills_dir = v;
         }
@@ -160,6 +169,17 @@ impl Config {
     fn validate(&self) -> Result<()> {
         if self.listen_addr.trim().is_empty() {
             return Err(anyhow!("LISTEN_ADDR 不能为空"));
+        }
+        // 安全守卫：监听非本机地址时必须配置 api_keys（否则管理端点/记忆/凭证对网络裸奔）
+        let is_loopback = self.listen_addr.starts_with("127.0.0.1")
+            || self.listen_addr.starts_with("localhost")
+            || self.listen_addr.starts_with("[::1]");
+        if !is_loopback && self.api_keys.is_empty() {
+            return Err(anyhow!(
+                "安全拒绝：listen_addr={} 不是本机地址，但未配置 api_keys。\
+                 请配置 api_keys（推荐）或改回 127.0.0.1",
+                self.listen_addr
+            ));
         }
         if self.upstream_base_url.trim().is_empty() {
             return Err(anyhow!("UPSTREAM_BASE_URL 不能为空"));

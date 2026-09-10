@@ -70,10 +70,19 @@ jobs:
 
       - name: Build NSIS installer
         working-directory: desktop
-        run: npx electron-builder --win nsis
+        shell: bash
+        run: |
+          set +e
+          npx electron-builder --win nsis --publish never 2>&1 | tee /tmp/nsis.log; RC=${PIPESTATUS[0]}
+          echo "electron-builder rc=$RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error title=electron-builder-failed::$(grep -iE 'error|⨯|cannot|failed|ENOENT|not found' /tmp/nsis.log | head -25 | tr '\n' '|' | cut -c1-6000)"
+          fi
+          exit $RC
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

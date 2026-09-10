@@ -1,5 +1,5 @@
 # Freebuff2API Rust 版 — 多阶段构建
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.95-bookworm AS builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./

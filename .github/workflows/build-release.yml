@@ -38,11 +38,13 @@ jobs:
 
       - name: Run tests + clippy
         env:
-          CARGO_HTTP_PROXY: ""   # 隔离本机代理配置（.cargo/config.toml）干扰
+          CARGO_HTTP_PROXY: ""   # 隔离本机 .cargo/config.toml 代理（已移出 git，双保险）
           HTTP_PROXY: ""
           HTTPS_PROXY: ""
           ALL_PROXY: ""
-        run: cargo test --offline
+        run: |
+          cargo test
+          cargo clippy -- -D warnings
 
       - name: Setup Node (Electron)
         uses: actions/setup-node@v4

@@ -19,9 +19,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          # 锁定与本地验证一致的版本，避免最新 stable 的 clippy 新 lint 触发 -D warnings
+          toolchain: 1.95.0
           targets: x86_64-pc-windows-msvc
+          components: clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -37,14 +40,24 @@ jobs:
           CARGO_HTTP_PROXY: "" # GitHub Actions 直连
 
       - name: Run tests + clippy
+        shell: bash
         env:
           CARGO_HTTP_PROXY: ""   # 隔离本机 .cargo/config.toml 代理（已移出 git，双保险）
           HTTP_PROXY: ""
           HTTPS_PROXY: ""
           ALL_PROXY: ""
         run: |
-          cargo test
-          cargo clippy -- -D warnings
+          set +e
+          cargo test 2>&1 | tee /tmp/test.log; TEST_RC=${PIPESTATUS[0]}
+          cargo clippy --all-targets -- -D warnings 2>&1 | tee /tmp/clippy.log; CLIPPY_RC=${PIPESTATUS[0]}
+          echo "test rc=$TEST_RC clippy rc=$CLIPPY_RC"
+          if [ "$TEST_RC" -ne 0 ]; then
+            echo "::error title=cargo-test-failed::$(tail -n 40 /tmp/test.log | tr '\n' '|' | cut -c1-6000)"
+          fi
+          if [ "$CLIPPY_RC" -ne 0 ]; then
+            echo "::error title=cargo-clippy-failed::$(grep -E '^error|^warning|-->' /tmp/clippy.log | head -30 | tr '\n' '|' | cut -c1-6000)"
+          fi
+          if [ "$TEST_RC" -ne 0 ] || [ "$CLIPPY_RC" -ne 0 ]; then exit 1; fi
 
       - name: Setup Node (Electron)
         uses: actions/setup-node@v4

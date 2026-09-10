@@ -127,7 +127,7 @@ fn pool_pick_best_and_cooldown() {
             token: token.into(),
             session: Arc::new(SessionManager::new(client.clone(), token.into(), cfg.clone())),
             score: tokio::sync::RwLock::new(0.0),
-            cooldown_until: tokio::sync::RwLock::new(None),
+            breaker: tokio::sync::RwLock::new(freebuff2api::pool::CircuitBreaker::new()),
         };
         let pool = Pool::new(&cfg, client.clone());
         // 池为空（Config::default 无 token）时 pick_best 应返回 None
@@ -148,10 +148,19 @@ fn pool_pick_best_and_cooldown() {
         let best2 = pool.pick_best().await.unwrap();
         assert_eq!(best2.name, "a1");
 
-        // 快照反映总数与健康状态
+        // 快照反映总数与熔断三态
         let snap = pool.snapshot().await;
         assert_eq!(snap.total, 2);
         let a2 = snap.accounts.iter().find(|x| x.name == "a2").unwrap();
-        assert!(!a2.healthy || a2.cooldown_until.is_some());
+        assert_eq!(a2.circuit_state, "open", "mark_cooldown 后应为 open");
+        assert!(a2.trips >= 1);
+
+        // 熔断三态：连续失败达阈值自动断开
+        for _ in 0..4 {
+            pool.mark_failure("a1", "boom").await;
+        }
+        let snap2 = pool.snapshot().await;
+        let a1 = snap2.accounts.iter().find(|x| x.name == "a1").unwrap();
+        assert_eq!(a1.circuit_state, "open", "连续失败 4 次应自动熔断");
     });
 }

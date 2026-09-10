@@ -1,11 +1,15 @@
 use freebuff2api::ads::AdRefresher;
 use freebuff2api::api::{build_router, AppState};
 use freebuff2api::config::Config;
+use freebuff2api::logbus::LogBus;
 use freebuff2api::models::ModelRegistry;
 use freebuff2api::pool::Pool;
 use freebuff2api::router::{ModelRouter, RouterConfig};
+use freebuff2api::skills::SkillsManager;
+use freebuff2api::telemetry::TelemetryWriter;
 use freebuff2api::upstream::UpstreamClient;
 use freebuff2api::usage::UsageDb;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,6 +58,20 @@ async fn main() -> anyhow::Result<()> {
     let usage = Arc::new(UsageDb::open(&cfg.sqlite_path)?);
     tracing::info!("用量统计 SQLite: {}", cfg.sqlite_path);
 
+    // 遥测（请求详情/事件链；独立库 + 独立写线程，不阻塞请求路径）
+    let telemetry = Arc::new(TelemetryWriter::spawn(PathBuf::from(&cfg.telemetry_path), 4096)?);
+    tracing::info!("遥测 SQLite: {}", cfg.telemetry_path);
+
+    // 实时日志总线（SSE 广播 + 环形缓冲）
+    let logs = Arc::new(LogBus::new(500));
+
+    // 技能系统（文件为真相源 + SQLite 索引；旧 prompts 保留兼容）
+    let skills = Arc::new(SkillsManager::open(
+        PathBuf::from(&cfg.skills_dir),
+        PathBuf::from(&cfg.skills_dir).with_extension("sqlite"),
+    )?);
+    tracing::info!("技能目录: {}（已载入 {} 条）", cfg.skills_dir, skills.list().len());
+
     // 广告保活
     let ads = Arc::new(AdRefresher::new(client.clone(), cfg.clone()));
 
@@ -77,6 +95,9 @@ async fn main() -> anyhow::Result<()> {
         registry,
         router,
         usage,
+        telemetry,
+        logs,
+        skills,
         ads,
         prompts,
         started: std::time::Instant::now(),
@@ -90,8 +111,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // 用普通 reqwest client 做 registry 拉取（避免与上游 http client 混淆）
+// 超时保护：注册表同步失败不应阻塞网关启动
 fn client_http() -> reqwest::Client {
-    let mut b = reqwest::Client::builder().user_agent("freebuff2api-registry");
+    let mut b = reqwest::Client::builder()
+        .user_agent("freebuff2api-registry")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10));
     if let Ok(p) = std::env::var("HTTPS_PROXY") {
         if !p.is_empty() {
             if let Ok(proxy) = reqwest::Proxy::all(&p) {

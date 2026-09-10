@@ -32,6 +32,16 @@ pub struct Config {
     pub token_saver: bool,
     /// 用量统计 SQLite 路径（空则禁用统计）
     pub sqlite_path: String,
+    /// 导入凭证存储路径（curl/HAR/Cookie 解析后落盘位置）
+    pub tokens_path: String,
+    /// 遥测 SQLite 路径（请求详情/事件链，独立库避免写锁竞争）
+    pub telemetry_path: String,
+    /// 技能目录（技能文件真相源）
+    pub skills_dir: String,
+    /// 技能注入模式：roster（只注入名称+描述）| full（全量拼接）
+    pub skills_inject_mode: String,
+    /// roster 注入的 token 预算上限
+    pub max_roster_tokens: usize,
     /// 内置面板目录（空则用嵌入资源）
     pub web_dir: String,
     /// 启动时跳过上游连通性检查
@@ -53,6 +63,11 @@ impl Default for Config {
             fallback_models: vec![],
             token_saver: false,
             sqlite_path: "data/freebuff2api.sqlite".into(),
+            tokens_path: "data/tokens.json".into(),
+            telemetry_path: "data/telemetry.sqlite".into(),
+            skills_dir: "data/skills".into(),
+            skills_inject_mode: "roster".into(),
+            max_roster_tokens: 2000,
             web_dir: String::new(),
             skip_upstream_check: false,
         }
@@ -113,6 +128,23 @@ impl Config {
         }
         if let Ok(v) = env::var("SQLITE_PATH") {
             self.sqlite_path = v;
+        }
+        if let Ok(v) = env::var("TOKENS_PATH") {
+            self.tokens_path = v;
+        }
+        if let Ok(v) = env::var("TELEMETRY_PATH") {
+            self.telemetry_path = v;
+        }
+        if let Ok(v) = env::var("SKILLS_DIR") {
+            self.skills_dir = v;
+        }
+        if let Ok(v) = env::var("SKILLS_INJECT_MODE") {
+            self.skills_inject_mode = v;
+        }
+        if let Ok(v) = env::var("MAX_ROSTER_TOKENS") {
+            if let Ok(n) = v.parse() {
+                self.max_roster_tokens = n;
+            }
         }
         if let Ok(v) = env::var("WEB_DIR") {
             self.web_dir = v;

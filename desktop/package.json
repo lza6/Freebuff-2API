@@ -1,6 +1,7 @@
 {
   "name": "freebuff2api-desktop",
-  "version": "0.2.0",
+  "productName": "Freebuff2API",
+  "version": "0.3.0",
   "description": "Freebuff2API 桌面启动器（内嵌网关 + 控制台）",
   "main": "main.js",
   "private": true,
@@ -19,6 +20,7 @@
     "asar": true,
     "files": [
       "main.js",
+      "preload.js",
       "icons/**/*"
     ],
     "extraResources": [

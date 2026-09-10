@@ -126,6 +126,19 @@ impl PromptManager {
 
     /// 组装最终 system 前缀（默认提示词 + 启用的自定义提示词 + 技能）
     pub async fn system_prefix(&self) -> String {
+        let mut s = self.system_prefix_prompts_only().await;
+        // 技能（含各自约束）
+        let skills = self.active_skills().await;
+        if !skills.is_empty() {
+            s.push_str("You have these active skills available. Use them as guidance for how you respond in relevant situations:\n");
+            s.push_str(&skills);
+        }
+        s
+    }
+
+    /// 仅提示词部分（默认提示词 + 启用的自定义提示词）——供技能系统 roster 模式复用，
+    /// 避免与 skills 模块的技能注入重复。
+    pub async fn system_prefix_prompts_only(&self) -> String {
         let mut s = String::new();
         // 默认提示词始终启用当 base
         if let Some(base) = self.prompts.read().await.get("default") {
@@ -136,12 +149,6 @@ impl PromptManager {
         let extra = self.active_prompts().await;
         if !extra.is_empty() {
             s.push_str(&extra);
-        }
-        // 技能（含各自约束）
-        let skills = self.active_skills().await;
-        if !skills.is_empty() {
-            s.push_str("You have these active skills available. Use them as guidance for how you respond in relevant situations:\n");
-            s.push_str(&skills);
         }
         s
     }

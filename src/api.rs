@@ -9,18 +9,23 @@
 
 use crate::ads::AdRefresher;
 use crate::config::Config;
+use crate::logbus::LogBus;
 use crate::models::ModelRegistry;
 use crate::pool::Pool;
 use crate::router::ModelRouter;
+use crate::skills::SkillsManager;
+use crate::telemetry::{TelemetryWriter, TraceRow};
 
 use crate::upstream::UpstreamClient;
 use crate::usage::UsageDb;
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::StreamExt;
 use std::sync::Arc;
 
 /// 统一 AppState（必须 Send+Sync+Clone 才能被 axum State 提取器使用）
@@ -32,6 +37,9 @@ pub struct AppState {
     pub registry: Arc<ModelRegistry>,
     pub router: Arc<ModelRouter>,
     pub usage: Arc<UsageDb>,
+    pub telemetry: Arc<TelemetryWriter>,
+    pub logs: Arc<LogBus>,
+    pub skills: Arc<SkillsManager>,
     pub ads: Arc<AdRefresher>,
     pub prompts: Arc<crate::prompts::PromptManager>,
     pub started: std::time::Instant,
@@ -42,11 +50,30 @@ pub struct AppState {
 
 /// 管理端点鉴权：配置了 api_keys 则要求请求头匹配；未配置则仅放行本机直连（无 X-Forwarded-For/X-Real-IP）。
 /// 本地单机软件默认监听 127.0.0.1，行为不变；跨机/代理访问必须显式配置 api_keys。
+/// 额外 CSRF 防护：带 Origin 头（浏览器发起）且非同源本机时拒绝。
 fn admin_authorized(headers: &HeaderMap, st: &AppState) -> bool {
+    if !origin_allowed(headers) {
+        return false;
+    }
     if st.cfg.api_keys.is_empty() {
         return is_loopback_request(headers);
     }
     authorized(headers, &st.cfg.api_keys)
+}
+
+/// CSRF 防护：浏览器跨站请求会带 Origin；非同源（非本机面板）一律拒绝。
+/// 非浏览器客户端（curl/SDK/桌面 IPC）不带 Origin，不受影响。
+fn origin_allowed(headers: &HeaderMap) -> bool {
+    match headers.get("origin").and_then(|v| v.to_str().ok()) {
+        None => true,
+        Some(o) => {
+            o.starts_with("http://127.0.0.1:")
+                || o.starts_with("http://localhost:")
+                || o == "http://127.0.0.1"
+                || o == "http://localhost"
+                || o.starts_with("file://")
+        }
+    }
 }
 
 /// 判断请求是否来自本机：无任何代理头 = 直连本机（环回）；出现 X-Forwarded-For 等视为经代理/跨机
@@ -59,23 +86,35 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/usage/totals", get(handle_usage_totals))
         .route("/api/usage/daily", get(handle_usage_daily))
         .route("/api/usage/requests", get(handle_usage_requests))
+        .route("/api/usage/requests/{id}", get(handle_usage_request_detail))
         .route("/api/usage/models", get(handle_usage_models))
-        .route("/api/usage/accounts", get(handle_accounts));
+        .route("/api/usage/accounts", get(handle_accounts))
+        .route("/api/skills", get(handle_skills_list).post(handle_skills_upsert))
+        .route("/api/skills/toggle", post(handle_skills_toggle))
+        .route("/api/skills/delete", post(handle_skills_delete))
+        .route("/api/skills/gate", post(handle_skills_gate))
+        .route("/api/logs/recent", get(handle_logs_recent))
+        .route("/api/logs/stream", get(handle_logs_stream))
+        .route("/api/doctor", get(handle_doctor));
 
     Router::new()
         .route("/", get(handle_dashboard))
         .route("/ui", get(handle_dashboard))
         .route("/healthz", get(handle_healthz))
         .route("/v1/models", get(handle_v1_models))
-        .route("/v1/chat/completions", axum::routing::post(handle_chat_completions))
-        .route("/v1/messages", axum::routing::post(handle_claude_messages))
-        .route("/api/tokens/import", axum::routing::post(handle_token_import))
+        .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/messages", post(handle_claude_messages))
+        .route("/api/tokens/import", post(handle_token_import))
         .route("/api/tokens", get(handle_tokens_list))
         .route("/api/account/balance", get(handle_account_balance))
-        .route("/api/account/detail", axum::routing::post(handle_account_detail))
-        .route("/v1/web/chat", axum::routing::post(handle_web_chat))
+        .route("/api/account/detail", post(handle_account_detail))
+        .route("/v1/web/chat", post(handle_web_chat))
+        .route(
+            "/v1/uploads",
+            post(handle_upload).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
         .route("/api/prompts", get(handle_prompts_list))
-        .route("/api/prompts/toggle", axum::routing::post(handle_prompts_toggle))
+        .route("/api/prompts/toggle", post(handle_prompts_toggle))
         .merge(api)
         .with_state(state)
 }
@@ -167,7 +206,7 @@ async fn handle_account_balance(State(st): State<AppState>, headers: HeaderMap) 
         .iter()
         .find(|t| looks_like_cookie(t))
         .cloned()
-        .or_else(|| load_imported_token().filter(|t| looks_like_cookie(t)));
+        .or_else(|| load_imported_token(&st.cfg.tokens_path).filter(|t| looks_like_cookie(t)));
     let cookie = match cookie_candidate {
         Some(c) => c,
         None => {
@@ -229,9 +268,9 @@ async fn handle_account_balance(State(st): State<AppState>, headers: HeaderMap) 
     }
 }
 
-/// 读取 data/tokens.json 中第一个导入 token
-fn load_imported_token() -> Option<String> {
-    crate::import::load_tokens("data/tokens.json").ok().and_then(|t| t.into_iter().next()).map(|t| t.token)
+/// 读取导入凭证文件中第一个 token（路径可配置）
+fn load_imported_token(path: &str) -> Option<String> {
+    crate::import::load_tokens(path).ok().and_then(|t| t.into_iter().next()).map(|t| t.token)
 }
 /// 统一 500 JSON 错误响应
 /// GET /api/prompts — 列出内置提示词与技能（含启用状态）
@@ -291,8 +330,23 @@ fn admin_denied() -> Response {
 
 /// web 版完整对话代理（Cookie 鉴权 chat/stream → 真实增量 SSE 透传 → OpenAI 兼容）
 /// POST /v1/web/chat — body: { model, content, thread_id?, images? }
-async fn handle_web_chat(State(_st): State<AppState>, body: axum::body::Bytes) -> Response {
-    let cookie = load_imported_token().filter(|t| t.contains("session-token"));
+/// images 支持两种形态：["storageId1", ...] 或 [{ storageId, mediaType?, name? }, ...]
+/// 鉴权与 /v1/chat/completions 一致：配置 api_keys 时校验；未配置时仅本机可访问。
+async fn handle_web_chat(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !origin_allowed(&headers) {
+        return admin_denied();
+    }
+    if !st.cfg.api_keys.is_empty() && !authorized(&headers, &st.cfg.api_keys) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": { "message": "invalid proxy api key", "type": "authentication_error" } })),
+        )
+            .into_response();
+    }
+    if st.cfg.api_keys.is_empty() && !is_loopback_request(&headers) {
+        return admin_denied();
+    }
+    let cookie = load_imported_token(&st.cfg.tokens_path).filter(|t| t.contains("session-token"));
     let cookie = match cookie {
         Some(c) => c,
         None => {
@@ -317,6 +371,33 @@ async fn handle_web_chat(State(_st): State<AppState>, body: axum::body::Bytes) -
     let content = parsed.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
     let thread_id = parsed.get("thread_id").and_then(|t| t.as_str()).map(|s| s.to_string());
     let reasoning_effort = parsed.get("reasoning_effort").and_then(|r| r.as_str());
+    // 多模态：解析 images（storageId 字符串数组或对象数组）
+    let images: Vec<crate::web_protocol::WebImage> = parsed
+        .get("images")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|it| {
+                    if let Some(s) = it.as_str() {
+                        Some(crate::web_protocol::WebImage {
+                            storage_id: s.to_string(),
+                            media_type: "image/png".into(),
+                            name: "image.png".into(),
+                            description_storage_id: None,
+                        })
+                    } else {
+                        let sid = it.get("storageId").and_then(|x| x.as_str())?;
+                        Some(crate::web_protocol::WebImage {
+                            storage_id: sid.to_string(),
+                            media_type: it.get("mediaType").and_then(|x| x.as_str()).unwrap_or("image/png").to_string(),
+                            name: it.get("name").and_then(|x| x.as_str()).unwrap_or("image.png").to_string(),
+                            description_storage_id: it.get("descriptionStorageId").and_then(|x| x.as_str()).map(String::from),
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     if content.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -325,19 +406,91 @@ async fn handle_web_chat(State(_st): State<AppState>, body: axum::body::Bytes) -
             .into_response();
     }
 
+    let images_count = images.len();
+    let model_name = model.clone();
     let client = match crate::web_protocol::WebClient::new(cookie, model) {
         Ok(c) => c,
         Err(e) => return internal_err(&anyhow::Error::msg(e.to_string())),
     };
-    // 真实增量流：上游 chat/stream SSE 逐事件实时转发为 OpenAI chunk
-    match client.chat_stream_raw(thread_id.as_deref(), &content, reasoning_effort, vec![], vec![]).await {
+    // 真实增量流：上游 chat/stream SSE 逐事件实时转发为 OpenAI chunk（images 透传多模态）
+    match client.chat_stream_raw(thread_id.as_deref(), &content, reasoning_effort, images, vec![]).await {
         Ok(body) => {
+            // 遥测：旁路扫描流（首字节/字节数/usage）+ 完成后上报（web 协议用 Cookie，标记 web-cookie）
+            let req_id = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+            let telem = st.telemetry.clone();
+            let logs = st.logs.clone();
+            let usage_db = st.usage.clone();
+            tokio::spawn(async move {
+                let t0 = std::time::Instant::now();
+                let mut stream = body.into_data_stream();
+                let mut ttft: Option<u64> = None;
+                let mut bytes: u64 = 0;
+                let mut tail = String::new();
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(b) => {
+                            if ttft.is_none() {
+                                ttft = Some(t0.elapsed().as_millis() as u64);
+                            }
+                            bytes += b.len() as u64;
+                            tail.push_str(&String::from_utf8_lossy(&b));
+                            if tail.len() > 8000 {
+                                tail = tail_keep(&tail, 4000);
+                            }
+                            if tx.send(Ok(b)).await.is_err() {
+                                break; // 客户端断开
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                            break;
+                        }
+                    }
+                }
+                let total_ms = t0.elapsed().as_millis() as u64;
+                let (pt, ct) = extract_usage(&tail).unwrap_or((0, 0));
+                usage_db
+                    .record_ex("web-cookie", &model_name, pt as i64, ct as i64, total_ms as i64, 200, "", "", &req_id)
+                    .ok();
+                telem.record(TraceRow {
+                    req_id: req_id.clone(),
+                    endpoint: "/v1/web/chat".into(),
+                    requested_model: model_name.clone(),
+                    resolved_model: model_name.clone(),
+                    account: "web-cookie".into(),
+                    status: 200,
+                    latency_ms: total_ms,
+                    ttft_ms: ttft,
+                    prompt_tokens: pt,
+                    completion_tokens: ct,
+                    stream: true,
+                    error_kind: None,
+                    error_excerpt: None,
+                    route_reason: Some(format!("web protocol, images={images_count}")),
+                    api_key: None,
+                    client_ip: None,
+                });
+                logs.emit(
+                    "info",
+                    "request",
+                    Some(&req_id),
+                    format!(
+                        "{model_name} web 流式完成 {bytes}B / {images_count} 图（首字节 {}ms / 总 {:.2}s）",
+                        ttft.unwrap_or(0),
+                        total_ms as f64 / 1000.0
+                    ),
+                );
+            });
+            let body_stream = futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|item| (item, rx))
+            });
             Response::builder()
                 .header("content-type", "text/event-stream")
                 .header("cache-control", "no-cache")
                 .header("connection", "keep-alive")
                 .header("x-accel-buffering", "no")
-                .body(body)
+                .body(Body::from_stream(body_stream))
                 .unwrap()
         }
         Err(e) => internal_err(&e),
@@ -365,7 +518,7 @@ async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, bod
     if !admin_authorized(&headers, &st) {
         return admin_denied();
     }
-    let text = match std::str::from_utf8(&body) {
+    let raw = match std::str::from_utf8(&body) {
         Ok(t) => t,
         Err(_) => {
             return (
@@ -375,7 +528,21 @@ async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, bod
                 .into_response();
         }
     };
-    let tokens = match crate::import::sniff_tokens(text) {
+    // 兼容 JSON 包裹：{"cookie": "..."} / {"text": "..."}（面板两种提交方式都支持）
+    let text: std::borrow::Cow<'_, str> = if raw.trim_start().starts_with('{') {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|v| {
+                v.get("cookie")
+                    .or_else(|| v.get("text"))
+                    .and_then(|x| x.as_str())
+                    .map(|s| std::borrow::Cow::Owned(s.to_string()))
+            })
+            .unwrap_or(std::borrow::Cow::Borrowed(raw))
+    } else {
+        std::borrow::Cow::Borrowed(raw)
+    };
+    let tokens = match crate::import::sniff_tokens(&text) {
         Ok(t) => t,
         Err(e) => {
             return (
@@ -385,8 +552,8 @@ async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, bod
                 .into_response();
         }
     };
-    let tokens_path = "data/tokens.json";
-    match crate::import::persist_tokens(tokens_path, &tokens) {
+    let tokens_path = st.cfg.tokens_path.clone();
+    match crate::import::persist_tokens(&tokens_path, &tokens) {
         Ok(added) => {
             if added.is_empty() {
                 return Json(serde_json::json!({ "ok": true, "added": 0, "message": "token 已存在，未重复添加" }))
@@ -441,7 +608,7 @@ async fn handle_tokens_list(State(st): State<AppState>, headers: HeaderMap) -> R
     if !admin_authorized(&headers, &st) {
         return admin_denied();
     }
-    match crate::import::load_tokens("data/tokens.json") {
+    match crate::import::load_tokens(&st.cfg.tokens_path) {
         Ok(tokens) => Json(serde_json::json!({
             "ok": true,
             "tokens": tokens.iter().map(|t| serde_json::json!({
@@ -480,7 +647,7 @@ async fn handle_account_detail(State(st): State<AppState>, headers: HeaderMap, b
     }
     let cookie = cookie.or_else(|| {
         st.cfg.auth_tokens.iter().find(|t| t.contains("session-token")).cloned()
-            .or_else(|| load_imported_token().filter(|t| t.contains("session-token")))
+            .or_else(|| load_imported_token(&st.cfg.tokens_path).filter(|t| t.contains("session-token")))
     });
     let cookie = match cookie {
         Some(c) => c,
@@ -512,13 +679,15 @@ async fn handle_account_detail(State(st): State<AppState>, headers: HeaderMap, b
     .into_response()
 }
 
-/// 脱敏：只显示前 6 + 后 4
+/// 脱敏：只显示前 6 + 后 4（按字符切分，避免多字节 token 触发 char boundary panic）
 fn mask(token: &str) -> String {
-    if token.len() <= 12 {
-        return format!("{}***", &token[..token.len().saturating_sub(3).max(1)]);
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() <= 12 {
+        let keep = chars.len().saturating_sub(3).max(1);
+        return format!("{}***", chars[..keep].iter().collect::<String>());
     }
-    let head = &token[..6];
-    let tail = &token[token.len() - 4..];
+    let head: String = chars[..6].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
     format!("{head}...{tail}")
 }
 
@@ -526,6 +695,7 @@ fn mask(token: &str) -> String {
 
 async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let start = std::time::Instant::now();
+    let req_id = uuid::Uuid::new_v4().to_string();
     // 解析请求
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -572,6 +742,7 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     };
     let account_name = account.name.clone();
     let token = account.token.clone();
+    st.telemetry.event(&req_id, "route", &format!("{requested} -> {model} via {account_name}"));
 
     // 确保会话
     let instance_id = match account.session.ensure_session(&model).await {
@@ -579,7 +750,9 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         Err(e) => {
             let msg = e.to_string();
             if msg.starts_with("waiting_room_queued") {
-                st.usage.record(&account_name, &model, 0, 0, 0, 429, "", "").ok();
+                st.usage
+                    .record_ex(&account_name, &model, 0, 0, 0, 429, "", "", &req_id)
+                    .ok();
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({ "error": { "message": msg, "type": "server_error", "code": "waiting_room_queued" } })),
@@ -589,7 +762,9 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
             st.pool
                 .update_score(&account_name, -30.0)
                 .await;
-            st.usage.record(&account_name, &model, 0, 0, 0, 502, "", "").ok();
+            st.usage
+                .record_ex(&account_name, &model, 0, 0, 0, 502, "", "", &req_id)
+                .ok();
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": { "message": format!("failed to acquire free session: {msg}"), "type": "server_error" } })),
@@ -602,7 +777,9 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     let run_id = match ensure_root_run(&st, &account_name, &token).await {
         Ok(id) => id,
         Err(e) => {
-            st.usage.record(&account_name, &model, 0, 0, 0, 502, "", "").ok();
+            st.usage
+                .record_ex(&account_name, &model, 0, 0, 0, 502, "", "", &req_id)
+                .ok();
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": { "message": format!("create run failed: {e}"), "type": "server_error" } })),
@@ -614,8 +791,9 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     // 配置上行 body：设 model + 思考程度降级/剥离 + 内置提示词/技能注入 + codebuff_metadata 注入
     let mut up_body = parsed.clone();
     up_body["model"] = serde_json::json!(model);
-    // 内置提示词+技能注入（system 消息前插）
-    let sys_prefix = st.prompts.system_prefix().await;
+    // 内置提示词 + 技能注入（system 消息前插）
+    // roster 模式：提示词走 prompts（base+启用项），技能走 skills 模块（只注入名称+描述）
+    let sys_prefix = build_system_prefix(&st).await;
     if !sys_prefix.trim().is_empty() {
         if let Some(messages) = up_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
             messages.insert(0, serde_json::json!({ "role": "system", "content": sys_prefix }));
@@ -638,6 +816,10 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         }
     }
     remove_passthrough_fields(&mut up_body);
+    // 流式请求：向上游显式申请 usage 帧（真实 token 统计所需；非流式响应本身含 usage）
+    if up_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false) {
+        up_body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
 
     // 转发上游
     let upstream_resp = match st
@@ -674,17 +856,16 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         .unwrap_or_default();
 
     if status.is_success() {
-        st.usage
-            .record(&account_name, &model, 0, 0, latency_ms, 200, &api_key, &client_ip)
-            .ok();
         st.pool.update_score(&account_name, 10.0).await;
+        st.telemetry.event(&req_id, "upstream_ok", &format!("HTTP {} 建连 {}ms", status.as_u16(), latency_ms));
         // run 收尾：FINISH 上报（释放上游 run 计数；失败不影响响应）
         if let Err(e) = st.client.finish_run(&token, &run_id, 1).await {
             tracing::debug!("finish_run 失败（不影响响应）: {e}");
         }
+        st.logs.emit("info", "request", Some(&req_id), format!("{model} 上游 200，准备转发（{latency_ms}ms 建连）"));
     } else {
         st.usage
-            .record(&account_name, &model, 0, 0, latency_ms, status.as_u16() as i64, &api_key, &client_ip)
+            .record_ex(&account_name, &model, 0, 0, latency_ms, status.as_u16() as i64, &api_key, &client_ip, &req_id)
             .ok();
         st.pool.update_score(&account_name, -20.0).await;
         // 上游 401/403 = token 失效 → 冷却熔断该账号（此前 mark_cooldown 为死代码，此处接线）
@@ -694,6 +875,27 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
                 .mark_cooldown(&account_name, std::time::Duration::from_secs(600), &format!("上游 {code}，token 疑似失效"))
                 .await;
         }
+        let kind = crate::retry::classify_status(code).as_str();
+        st.telemetry.event(&req_id, "upstream_error", &format!("HTTP {code} ({kind})"));
+        st.telemetry.record(TraceRow {
+            req_id: req_id.clone(),
+            endpoint: "/v1/chat/completions".into(),
+            requested_model: requested.clone(),
+            resolved_model: model.clone(),
+            account: account_name.clone(),
+            status: code,
+            latency_ms: latency_ms as u64,
+            ttft_ms: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stream: false,
+            error_kind: Some(kind.to_string()),
+            error_excerpt: None,
+            route_reason: Some(format!("{} -> {}", requested, model)),
+            api_key: Some(api_key.clone()),
+            client_ip: Some(client_ip.clone()),
+        });
+        st.logs.emit("warn", "request", Some(&req_id), format!("上游 {code}（{kind}），账号 {account_name} 已扣分{}", if code == 401 || code == 403 { "并冷却 10 分钟" } else { "" }));
     }
 
     // 流式转发上游响应（真实增量透传 + 上游错误原样透传）
@@ -722,10 +924,123 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         )
             .into_response();
     }
-    builder
-        .body(Body::from_stream(upstream_resp.bytes_stream()))
-        .unwrap()
-        .into_response()
+
+    // 2xx：分流（非流式读全量解析 usage；流式 spawn 转发 + 旁路采集）
+    let is_stream = parsed.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let telem = st.telemetry.clone();
+    let logs = st.logs.clone();
+    let usage_db = st.usage.clone();
+    let (rid, acc, mdl, key, ip) = (req_id.clone(), account_name.clone(), model.clone(), api_key.clone(), client_ip.clone());
+    let route_reason = format!("{requested} -> {model}");
+
+    if !is_stream {
+        let bytes = upstream_resp.bytes().await.unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let (pt, ct) = extract_usage(&text).unwrap_or((0, 0));
+        let total_ms = start.elapsed().as_millis() as u64;
+        usage_db
+            .record_ex(&acc, &mdl, pt as i64, ct as i64, total_ms as i64, 200, &key, &ip, &rid)
+            .ok();
+        telem.record(TraceRow {
+            req_id: rid.clone(),
+            endpoint: "/v1/chat/completions".into(),
+            requested_model: requested.clone(),
+            resolved_model: mdl.clone(),
+            account: acc.clone(),
+            status: 200,
+            latency_ms: total_ms,
+            ttft_ms: None,
+            prompt_tokens: pt,
+            completion_tokens: ct,
+            stream: false,
+            error_kind: None,
+            error_excerpt: None,
+            route_reason: Some(route_reason),
+            api_key: Some(key.clone()),
+            client_ip: Some(ip.clone()),
+        });
+        logs.emit("info", "request", Some(&rid), format!("{mdl} 完成 {}+{} tok（{:.2}s）", pt, ct, total_ms as f64 / 1000.0));
+        return builder.body(Body::from(bytes)).unwrap().into_response();
+    }
+
+    // 流式：spawn 转发任务；旁路扫描 usage、记录首字节与总耗时
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+    tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let mut stream = upstream_resp.bytes_stream();
+        let mut ttft: Option<u64> = None;
+        let mut tail = String::new();
+        let mut totals: (u64, u64) = (0, 0);
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(b) => {
+                    if ttft.is_none() {
+                        ttft = Some(t0.elapsed().as_millis() as u64);
+                    }
+                    tail.push_str(&String::from_utf8_lossy(&b));
+                    if tail.len() > 8000 {
+                        tail = tail_keep(&tail, 4000);
+                    }
+                    if let Some((p, c)) = extract_usage(&tail) {
+                        totals = (p, c);
+                    }
+                    if tx.send(Ok(b)).await.is_err() {
+                        break; // 客户端断开
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                    telem.record(TraceRow {
+                        req_id: rid.clone(),
+                        endpoint: "/v1/chat/completions".into(),
+                        requested_model: String::new(),
+                        resolved_model: mdl.clone(),
+                        account: acc.clone(),
+                        status: 502,
+                        latency_ms: latency_ms as u64 + t0.elapsed().as_millis() as u64,
+                        ttft_ms: ttft,
+                        prompt_tokens: totals.0,
+                        completion_tokens: totals.1,
+                        stream: true,
+                        error_kind: Some("network".into()),
+                        error_excerpt: Some(e.to_string().chars().take(300).collect()),
+                        route_reason: None,
+                        api_key: Some(key.clone()),
+                        client_ip: Some(ip.clone()),
+                    });
+                    logs.emit("error", "request", Some(&rid), format!("{mdl} 流中断: {e}"));
+                    return;
+                }
+            }
+        }
+        let total_ms = latency_ms as u64 + t0.elapsed().as_millis() as u64;
+        usage_db
+            .record_ex(&acc, &mdl, totals.0 as i64, totals.1 as i64, total_ms as i64, 200, &key, &ip, &rid)
+            .ok();
+        telem.record(TraceRow {
+            req_id: rid.clone(),
+            endpoint: "/v1/chat/completions".into(),
+            requested_model: String::new(),
+            resolved_model: mdl.clone(),
+            account: acc.clone(),
+            status: 200,
+            latency_ms: total_ms,
+            ttft_ms: ttft,
+            prompt_tokens: totals.0,
+            completion_tokens: totals.1,
+            stream: true,
+            error_kind: None,
+            error_excerpt: None,
+            route_reason: Some(route_reason),
+            api_key: Some(key.clone()),
+            client_ip: Some(ip.clone()),
+        });
+        logs.emit("info", "request", Some(&rid), format!("{mdl} 流式完成 {}+{} tok（首字节 {}ms / 总 {:.2}s）", totals.0, totals.1, ttft.unwrap_or(0), total_ms as f64 / 1000.0));
+    });
+    let body_stream = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    builder.body(Body::from_stream(body_stream)).unwrap().into_response()
 }
 
 async fn ensure_root_run(st: &AppState, account_name: &str, token: &str) -> anyhow::Result<String> {
@@ -856,7 +1171,97 @@ async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, 
     // 非流式：把 OpenAI 响应转换回 Claude 格式（message + content blocks + stop_reason）
     let wants_stream = parsed.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
     if wants_stream {
-        builder.body(Body::from_stream(upstream_resp.bytes_stream())).unwrap().into_response()
+        // 流式：OpenAI SSE → canonical event → Anthropic 事件流（不再直接透传）
+        let claude_req_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+        let model_for_render = resolved.clone();
+        let telem = st.telemetry.clone();
+        let logs = st.logs.clone();
+        let (rid, acc, mdl, req_model) = (claude_req_id.clone(), account.name.clone(), resolved.clone(), model.clone());
+        let key = headers
+            .get("x-api-key")
+            .or_else(|| headers.get("authorization"))
+            .map(|v| v.to_str().unwrap_or("").to_string())
+            .map(|k| if k.len() > 12 { format!("{}***{}", &k[..8], &k[k.len() - 4..]) } else { "***".to_string() })
+            .unwrap_or_default();
+        let t_start = std::time::Instant::now();
+        tokio::spawn(async move {
+            let mut decoder = crate::protocol::openai_sse::OpenAiSseDecoder::new();
+            let mut renderer = crate::protocol::anthropic_sse::AnthropicSseRenderer::new(&model_for_render);
+            let mut stream = upstream_resp.bytes_stream();
+            let mut ttft: Option<u64> = None;
+            let mut totals: (u64, u64) = (0, 0);
+            let mut err_text: Option<String> = None;
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(b) => {
+                        if ttft.is_none() {
+                            ttft = Some(t_start.elapsed().as_millis() as u64);
+                        }
+                        let events = decoder.feed(&b);
+                        let mut out = String::new();
+                        for ev in &events {
+                            if let crate::protocol::stream::CanonicalEvent::Usage { input_tokens, output_tokens } = ev {
+                                totals = (*input_tokens, *output_tokens);
+                            }
+                            for frame in renderer.render(ev) {
+                                out.push_str(&frame);
+                            }
+                        }
+                        if !out.is_empty() && tx.send(Ok(axum::body::Bytes::from(out))).await.is_err() {
+                            break; // 客户端断开
+                        }
+                    }
+                    Err(e) => {
+                        err_text = Some(e.to_string());
+                        let frames = renderer.render(&crate::protocol::stream::CanonicalEvent::Error(e.to_string())).join("");
+                        let _ = tx.send(Ok(axum::body::Bytes::from(frames))).await;
+                        break;
+                    }
+                }
+            }
+            // 收尾：冲刷 decoder 残余 + renderer 兜底 message_stop
+            let mut tail = String::new();
+            for ev in decoder.finish() {
+                for frame in renderer.render(&ev) {
+                    tail.push_str(&frame);
+                }
+            }
+            tail.push_str(&renderer.finish().join(""));
+            if !tail.is_empty() {
+                let _ = tx.send(Ok(axum::body::Bytes::from(tail))).await;
+            }
+            let total_ms = t_start.elapsed().as_millis() as u64;
+            let status = if err_text.is_some() { 502u16 } else { 200 };
+            telem.record(TraceRow {
+                req_id: rid.clone(),
+                endpoint: "/v1/messages".into(),
+                requested_model: req_model,
+                resolved_model: mdl.clone(),
+                account: acc.clone(),
+                status,
+                latency_ms: total_ms,
+                ttft_ms: ttft,
+                prompt_tokens: totals.0,
+                completion_tokens: totals.1,
+                stream: true,
+                error_kind: err_text.as_ref().map(|_| "network".to_string()),
+                error_excerpt: err_text.map(|t| t.chars().take(300).collect()),
+                route_reason: None,
+                api_key: Some(key),
+                client_ip: None,
+            });
+            logs.emit(if status == 200 { "info" } else { "error" }, "request", Some(&rid), format!("{mdl} Claude 流式完成 {}+{} tok（{:.2}s）", totals.0, totals.1, total_ms as f64 / 1000.0));
+        });
+        let body_stream = futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|item| (item, rx))
+        });
+        builder
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .body(Body::from_stream(body_stream))
+            .unwrap()
+            .into_response()
     } else {
         let bytes = upstream_resp.bytes().await.unwrap_or_default();
         let openai_resp: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
@@ -993,6 +1398,457 @@ fn openai_to_claude_response(openai: &serde_json::Value, model: &str) -> serde_j
             "output_tokens": output_tokens,
         }
     })
+}
+
+// ---------- 技能 API ----------
+
+/// GET /api/skills — 技能列表 + roster 注入预览
+async fn handle_skills_list(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let skills = st.skills.list();
+    let roster = st.skills.system_prefix(st.cfg.max_roster_tokens);
+    let roster_tokens = roster.chars().count() / 4 + 1;
+    Json(serde_json::json!({
+        "ok": true,
+        "skills": skills,
+        "roster_preview": roster,
+        "roster_tokens": roster_tokens,
+        "max_roster_tokens": st.cfg.max_roster_tokens,
+    }))
+    .into_response()
+}
+
+/// POST /api/skills — 新建/更新技能 body: { id?, name, description, body, triggers? }
+async fn handle_skills_upsert(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let id = v.get("id").and_then(|x| x.as_str());
+    let input = crate::skills::SkillInput {
+        name: v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        description: v.get("description").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        body: v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        triggers: v
+            .get("triggers")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+    };
+    if input.name.trim().is_empty() || input.description.trim().is_empty() {
+        return bad_req("name 和 description 不能为空");
+    }
+    // 质量门：对 name/description/body 统一校验；未通过默认拒绝（force:true 可强制保存）
+    let force = v.get("force").and_then(|x| x.as_bool()).unwrap_or(false);
+    let mut issues = st.skills.gate(&input.body);
+    issues.extend(st.skills.gate(&input.name));
+    issues.extend(st.skills.gate(&input.description));
+    if !issues.is_empty() && !force {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "message": "质量门未通过（如确认无误可加 force:true 强制保存）", "issues": issues })),
+        )
+            .into_response();
+    }
+    match st.skills.upsert(id, input) {
+        Ok(s) => {
+            let gate = st.skills.gate(&s.body);
+            st.logs.emit("info", "skills", None, format!("技能已保存: {}", s.name));
+            Json(serde_json::json!({ "ok": true, "skill": s, "gate": gate })).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/skills/toggle — body: { id, enabled }
+async fn handle_skills_toggle(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+    let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+    match st.skills.toggle(id, enabled) {
+        Ok(ok) => Json(serde_json::json!({ "ok": ok, "id": id, "enabled": enabled })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/skills/delete — body: { id }
+async fn handle_skills_delete(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+    match st.skills.delete(id) {
+        Ok(ok) => Json(serde_json::json!({ "ok": ok, "id": id })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/skills/gate — body: { body } 返回质量问题列表（空数组=通过）
+async fn handle_skills_gate(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("invalid json"),
+    };
+    let text = v.get("body").and_then(|x| x.as_str()).unwrap_or("");
+    Json(serde_json::json!({ "ok": true, "issues": st.skills.gate(text) })).into_response()
+}
+
+// ---------- 日志 API ----------
+
+#[derive(serde::Deserialize)]
+struct LogsQuery {
+    limit: Option<usize>,
+    after_id: Option<u64>,
+    /// SSE 场景浏览器无法设置请求头，允许用 query 传 api key（仅 api_keys 非空时校验）
+    key: Option<String>,
+}
+
+/// GET /api/logs/recent?limit=200 — 最近日志（首屏加载）
+async fn handle_logs_recent(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<LogsQuery>) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let events = st.logs.recent(q.limit.unwrap_or(200).min(1000), q.after_id);
+    Json(serde_json::json!({ "ok": true, "events": events, "count": events.len() })).into_response()
+}
+
+/// GET /api/logs/stream — 实时日志 SSE。
+/// - 支持 `?key=`（浏览器 EventSource 无法带头）
+/// - 支持 `Last-Event-ID` 请求头：断线重连时先补发错过的事件
+async fn handle_logs_stream(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<LogsQuery>) -> Response {
+    let query_key_ok = !st.cfg.api_keys.is_empty()
+        && q.key
+            .as_deref()
+            .map(|k| st.cfg.api_keys.iter().any(|x| x == k))
+            .unwrap_or(false);
+    if !admin_authorized(&headers, &st) && !query_key_ok {
+        return admin_denied();
+    }
+    // 断线补发：浏览器重连会带 Last-Event-ID
+    let last_id = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    let backlog: Vec<Result<Event, std::convert::Infallible>> = st
+        .logs
+        .recent(200, last_id)
+        .into_iter()
+        .map(|ev| {
+            let data = serde_json::to_string(&ev).unwrap_or_default();
+            Ok(Event::default().id(ev.id.to_string()).data(data))
+        })
+        .collect();
+    let rx = st.logs.subscribe();
+    let live = futures::stream::unfold(rx, |mut rx2| async move {
+        loop {
+            match rx2.recv().await {
+                Ok(ev) => {
+                    let data = serde_json::to_string(&ev).unwrap_or_default();
+                    let sse = Event::default().id(ev.id.to_string()).data(data);
+                    return Some((Ok::<Event, std::convert::Infallible>(sse), rx2));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    let stream = futures::stream::iter(backlog).chain(live);
+    Sse::new(stream).into_response()
+}
+
+// ---------- 请求详情 ----------
+
+/// GET /api/usage/requests/{id} — 单条请求完整信息 + 事件链
+async fn handle_usage_request_detail(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<i64>,
+) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    match st.usage.request_by_id(id) {
+        Ok(Some(rec)) => {
+            let (events, trace) = if rec.req_id.is_empty() {
+                (Vec::new(), None)
+            } else {
+                (
+                    read_telemetry_events(&st.cfg.telemetry_path, &rec.req_id),
+                    read_telemetry_request(&st.cfg.telemetry_path, &rec.req_id),
+                )
+            };
+            Json(serde_json::json!({ "ok": true, "request": rec, "trace": trace, "events": events })).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false, "message": "request not found" }))).into_response(),
+        Err(e) => internal_err(&e),
+    }
+}
+
+/// 读取遥测事件（按 req_id 关联；低频操作，短连接可接受）
+fn read_telemetry_events(db_path: &str, req_id: &str) -> Vec<serde_json::Value> {
+    let conn = match rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut stmt = match conn.prepare("SELECT ts, kind, detail FROM events WHERE req_id = ?1 ORDER BY id DESC LIMIT 50") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(rusqlite::params![req_id], |r| {
+        Ok(serde_json::json!({
+            "ts": r.get::<_, String>(0)?,
+            "kind": r.get::<_, String>(1)?,
+            "detail": r.get::<_, String>(2)?,
+        }))
+    });
+    match rows {
+        Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 读取遥测富记录（endpoint/ttft/error_kind 等；详情抽屉优先展示）
+fn read_telemetry_request(db_path: &str, req_id: &str) -> Option<serde_json::Value> {
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?;
+    let mut stmt = conn
+        .prepare("SELECT ts,endpoint,requested_model,resolved_model,account,status,latency_ms,ttft_ms,prompt_tokens,completion_tokens,stream,error_kind,error_excerpt,route_reason FROM requests_v2 WHERE req_id = ?1 ORDER BY id DESC LIMIT 1")
+        .ok()?;
+    let mut rows = stmt
+        .query_map(rusqlite::params![req_id], |r| {
+            Ok(serde_json::json!({
+                "ts": r.get::<_, String>(0)?,
+                "endpoint": r.get::<_, String>(1)?,
+                "requested_model": r.get::<_, String>(2)?,
+                "resolved_model": r.get::<_, String>(3)?,
+                "account": r.get::<_, String>(4)?,
+                "status": r.get::<_, i64>(5)?,
+                "latency_ms": r.get::<_, i64>(6)?,
+                "ttft_ms": r.get::<_, Option<i64>>(7)?,
+                "prompt_tokens": r.get::<_, i64>(8)?,
+                "completion_tokens": r.get::<_, i64>(9)?,
+                "stream": r.get::<_, i64>(10)? != 0,
+                "error_kind": r.get::<_, Option<String>>(11)?,
+                "error_excerpt": r.get::<_, Option<String>>(12)?,
+                "route_reason": r.get::<_, Option<String>>(13)?,
+            }))
+        })
+        .ok()?;
+    rows.next().and_then(|r| r.ok())
+}
+
+// ---------- 系统体检 ----------
+
+/// GET /api/doctor — 逐项检查（四态：ok / fault / unknown / fact；"未检查"就是未检查）
+async fn handle_doctor(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let mut checks: Vec<serde_json::Value> = Vec::new();
+
+    // 1. 配置
+    checks.push(serde_json::json!({
+        "id": "config", "label": "配置", "state": "ok",
+        "detail": format!("监听 {}，上游 {}", st.cfg.listen_addr, st.cfg.upstream_base_url),
+    }));
+    // 2. 账号池
+    let snap = st.pool.snapshot().await;
+    let healthy = snap.accounts.iter().filter(|a| a.healthy).count();
+    let (acct_state, acct_fix) = if snap.total == 0 {
+        ("fault", "去「账号」页导入 Cookie / 一键登录")
+    } else if healthy == 0 {
+        ("fault", "所有账号冷却中：等待冷却结束，或重新登录刷新凭证")
+    } else {
+        ("ok", "")
+    };
+    checks.push(serde_json::json!({
+        "id": "accounts", "label": "账号池", "state": acct_state,
+        "detail": format!("{healthy}/{} 个账号可用", snap.total),
+        "fix": acct_fix,
+    }));
+    // 3. 模型注册表
+    let models = st.registry.models().await;
+    checks.push(serde_json::json!({
+        "id": "models", "label": "模型注册表",
+        "state": if models.is_empty() { "fault" } else { "ok" },
+        "detail": format!("{} 个模型可用", models.len()),
+        "fix": if models.is_empty() { "检查上游连通性与代理设置" } else { "" },
+    }));
+    // 4. 遥测写入
+    let dropped = st.telemetry.dropped();
+    checks.push(serde_json::json!({
+        "id": "telemetry", "label": "遥测写入",
+        "state": if dropped > 1000 { "fault" } else { "ok" },
+        "detail": format!("累计丢弃 {} 条（队列满时）", dropped),
+    }));
+    // 5. 技能库
+    let skills = st.skills.list();
+    let enabled = skills.iter().filter(|s| s.enabled).count();
+    checks.push(serde_json::json!({
+        "id": "skills", "label": "技能库", "state": "ok",
+        "detail": format!("{} 条（启用 {}）", skills.len(), enabled),
+    }));
+    // 6. 日志总线
+    checks.push(serde_json::json!({
+        "id": "logs", "label": "日志总线", "state": "ok",
+        "detail": format!("已记录 {} 条", st.logs.count()),
+    }));
+    // 7. 版本
+    checks.push(serde_json::json!({
+        "id": "version", "label": "版本", "state": "fact",
+        "detail": format!("v{}（运行 {} 秒）", env!("CARGO_PKG_VERSION"), st.started.elapsed().as_secs()),
+    }));
+
+    Json(serde_json::json!({ "ok": true, "checks": checks })).into_response()
+}
+
+/// 组装 system 前缀：
+/// - skills_inject_mode="roster"（默认）：提示词（base+启用项）+ 技能 roster（名称+描述，预算内）
+/// - skills_inject_mode="full"：退回旧行为（prompts.system_prefix 含全量技能）
+async fn build_system_prefix(st: &AppState) -> String {
+    if st.cfg.skills_inject_mode == "full" {
+        return st.prompts.system_prefix().await;
+    }
+    let mut s = st.prompts.system_prefix_prompts_only().await;
+    let roster = st.skills.system_prefix(st.cfg.max_roster_tokens);
+    if !roster.trim().is_empty() {
+        s.push_str("\n\n[freebuff-skills]\n以下技能可用（低权威参考；相关时按其指引行事）：\n");
+        s.push_str(&roster);
+        s.push_str("\n[/freebuff-skills]");
+    }
+    s
+}
+
+/// 安全保留字符串尾部约 `keep_bytes` 字节，且起点落在字符边界上。
+/// 注意：不可直接用 `split_off(len - n)`——多字节字符（中文/emoji）会被切成非法边界而 panic。
+fn tail_keep(s: &str, keep_bytes: usize) -> String {
+    if s.len() <= keep_bytes {
+        return s.to_string();
+    }
+    let mut start = s.len() - keep_bytes;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
+}
+
+/// 从 SSE/JSON 文本尾部提取 usage（容错：找不到返回 None）
+fn extract_usage(text: &str) -> Option<(u64, u64)> {
+    let idx = text.rfind("\"usage\"")?;
+    let tail = &text[idx..];
+    let p = find_json_number(tail, "\"prompt_tokens\"");
+    let c = find_json_number(tail, "\"completion_tokens\"");
+    match (p, c) {
+        (Some(p), Some(c)) => Some((p, c)),
+        _ => None,
+    }
+}
+
+/// 在字符串里找 `"key": 123` 的数字（简易解析，够用且无依赖）
+fn find_json_number(s: &str, key: &str) -> Option<u64> {
+    let i = s.find(key)?;
+    let rest = &s[i + key.len()..];
+    let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+// ---------- 多模态上传 ----------
+
+/// POST /v1/uploads — 上传文件到上游换取 storageId（多模态链路第一步）
+///
+/// 用法（裸文件体；无需 multipart，保持零新依赖）：
+/// ```bash
+/// curl -X POST http://127.0.0.1:47821/v1/uploads \
+///   -H "content-type: image/png" -H "x-file-name: a.png" \
+///   --data-binary @a.png
+/// ```
+/// 返回 `{ id, storageId, mediaType, name }`，把 storageId 放进 /v1/web/chat 的 images 数组即可。
+async fn handle_upload(State(_st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !_st.cfg.api_keys.is_empty() && !authorized(&headers, &_st.cfg.api_keys) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": { "message": "invalid proxy api key", "type": "authentication_error" } })),
+        )
+            .into_response();
+    }
+    let cookie = load_imported_token(&_st.cfg.tokens_path).filter(|t| t.contains("session-token"));
+    let cookie = match cookie {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": { "message": "多模态上传需要 web Cookie 凭证（先 POST /api/tokens/import 导入）", "type": "invalid_request_error", "code": "multimodal_requires_web_cookie" } })),
+            )
+                .into_response();
+        }
+    };
+    if body.is_empty() {
+        return bad_req("empty body（请用 --data-binary 发送文件内容）");
+    }
+    if body.len() > 20 * 1024 * 1024 {
+        return bad_req("文件过大（上限 20MB）");
+    }
+    let filename = headers
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("upload.png")
+        .to_string();
+    let mime = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| s.starts_with("image/") || s.starts_with("application/pdf"))
+        .unwrap_or("image/png")
+        .to_string();
+
+    let client = match crate::web_protocol::WebClient::new(cookie, "glm-5.3-flash".into()) {
+        Ok(c) => c,
+        Err(e) => return internal_err(&anyhow::Error::msg(e.to_string())),
+    };
+    match client.upload(body.to_vec(), &filename, &mime).await {
+        Ok(up) => {
+            _st.logs.emit("info", "upload", None, format!("上传 {}（{:.1}KB）→ storageId {}", filename, body.len() as f64 / 1024.0, up.storage_id));
+            Json(serde_json::json!({
+                "id": up.storage_id,
+                "object": "file",
+                "storageId": up.storage_id,
+                "mediaType": up.media_type,
+                "name": up.name,
+                "bytes": body.len(),
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": { "message": e.to_string(), "type": "upstream_error" } }))).into_response(),
+    }
+}
+
+/// 统一 400 JSON 响应
+fn bad_req(msg: &str) -> Response {
+    (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": msg }))).into_response()
 }
 
 // ---------- 工具 ----------

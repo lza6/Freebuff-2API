@@ -22,6 +22,9 @@ pub struct UsageRecord {
     pub status: i64,
     pub api_key: String,
     pub client_ip: String,
+    /// 关联遥测事件链的请求 id（详情抽屉用）
+    #[serde(default)]
+    pub req_id: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -71,12 +74,20 @@ impl UsageDb {
             );
             "#,
         )?;
+        // 迁移：为旧库补 req_id 列（幂等）
+        let has_req_id: bool = conn
+            .prepare("SELECT name FROM pragma_table_info('requests') WHERE name='req_id'")
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        if !has_req_id {
+            conn.execute_batch("ALTER TABLE requests ADD COLUMN req_id TEXT DEFAULT '';").ok();
+        }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn record(
         &self,
         account: &str,
@@ -88,12 +99,29 @@ impl UsageDb {
         api_key: &str,
         client_ip: &str,
     ) -> Result<()> {
+        self.record_ex(account, model, prompt_tokens, completion_tokens, latency_ms, status, api_key, client_ip, "")
+    }
+
+    /// 带 req_id 的记录（供请求详情与事件链关联）
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_ex(
+        &self,
+        account: &str,
+        model: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        latency_ms: i64,
+        status: i64,
+        api_key: &str,
+        client_ip: &str,
+        req_id: &str,
+    ) -> Result<()> {
         let ts = Utc::now().to_rfc3339();
         let date = format!("{}-{:02}-{:02}", Utc::now().year(), Utc::now().month(), Utc::now().day());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO requests (ts,account,model,prompt_tokens,completion_tokens,latency_ms,status,api_key,client_ip) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![ts, account, model, prompt_tokens, completion_tokens, latency_ms, status, api_key, client_ip],
+            "INSERT INTO requests (ts,account,model,prompt_tokens,completion_tokens,latency_ms,status,api_key,client_ip,req_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![ts, account, model, prompt_tokens, completion_tokens, latency_ms, status, api_key, client_ip, req_id],
         )?;
         conn.execute(
             r#"INSERT INTO daily_usage (date,model,requests,prompt_tokens,completion_tokens,errors)
@@ -108,10 +136,38 @@ impl UsageDb {
         Ok(())
     }
 
+    /// 按 id 查询单条请求（请求详情抽屉）
+    pub fn request_by_id(&self, id: i64) -> Result<Option<UsageRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id,ts,account,model,prompt_tokens,completion_tokens,latency_ms,status,api_key,client_ip,COALESCE(req_id,'') FROM requests WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |r| {
+            Ok(UsageRecord {
+                id: r.get(0)?,
+                ts: r.get(1)?,
+                account: r.get(2)?,
+                model: r.get(3)?,
+                prompt_tokens: r.get(4)?,
+                completion_tokens: r.get(5)?,
+                latency_ms: r.get(6)?,
+                status: r.get(7)?,
+                api_key: r.get(8).unwrap_or_default(),
+                client_ip: r.get(9).unwrap_or_default(),
+                req_id: r.get(10).unwrap_or_default(),
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(Some(rec)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     pub fn recent_requests(&self, limit: i64) -> Result<Vec<UsageRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id,ts,account,model,prompt_tokens,completion_tokens,latency_ms,status,api_key,client_ip FROM requests ORDER BY id DESC LIMIT ?1",
+            "SELECT id,ts,account,model,prompt_tokens,completion_tokens,latency_ms,status,api_key,client_ip,COALESCE(req_id,'') FROM requests ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
             Ok(UsageRecord {
@@ -125,6 +181,7 @@ impl UsageDb {
                 status: r.get(7)?,
                 api_key: r.get(8).unwrap_or_default(),
                 client_ip: r.get(9).unwrap_or_default(),
+                req_id: r.get(10).unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();

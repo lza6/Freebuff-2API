@@ -21,7 +21,7 @@ Freebuff2API 将 [Freebuff](https://freebuff.com) 免费层逆向为 **OpenAI �
 ## 快速开始
 
 ### 桌面版（推荐）
-1. 下载 `Freebuff2API Setup 0.2.0.exe`（Release 页）
+1. 下载 `Freebuff2API Setup 0.3.0.exe`（Release 页）
 2. 安装后双击 → 自动拉起网关 + 打开控制台
 3. 托盘「一键登录新账号」→ 浏览器登录 freebuff.com → 自动抓 Cookie 入库
 

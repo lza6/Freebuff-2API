@@ -20,7 +20,7 @@ Freebuff2API reverse-engineers the [Freebuff](https://freebuff.com) free tier in
 ## Quick Start
 
 ### Desktop (recommended)
-Download `Freebuff2API Setup 0.2.0.exe` from Releases → install → launch → gateway auto-starts → dashboard opens. Use tray "Login new account" to auto-capture cookies.
+Download `Freebuff2API Setup 0.3.0.exe` from Releases → install → launch → gateway auto-starts → dashboard opens. Use tray "Login new account" to auto-capture cookies.
 
 ### Source
 ```bash

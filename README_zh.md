@@ -90,6 +90,8 @@ print(resp.choices[0].message.content)
   "http_proxy": "",                        // 如 http://127.0.0.1:10808
   "ad_providers": ["gravity"],             // 广告保活 provider
   "sqlite_path": "data/freebuff2api.sqlite",
+  "memory_path": "data/memory.sqlite",     // 记忆库（用户偏好/纠正）
+  "telemetry_path": "data/telemetry.sqlite", // 请求详情/事件链
   "token_saver": false                     // 压缩超长 tool_result 省 token
 }
 ```
@@ -119,6 +121,11 @@ print(resp.choices[0].message.content)
 | `/api/skills/gate` | POST | 质量门预检（返回问题列表） |
 | `/api/logs/stream` | GET | 实时日志（SSE，支持 `Last-Event-ID` 断线补发） |
 | `/api/logs/recent` | GET | 最近日志（`?limit=200`） |
+| `/api/memory` | GET / POST | 记忆库（列表+统计 / 手动新增） |
+| `/api/memory/delete` | POST | 删除记忆 |
+| `/api/memory/static` | POST | 标记/取消"稳定事实" |
+| `/api/usage/cost` | GET | 速率与错误率（30 分钟滑窗） |
+| `/mcp` | POST | MCP JSON-RPC（只读工具：list_models / list_accounts / usage_summary） |
 | `/api/usage/requests/{id}` | GET | 单条请求详情（含遥测与事件链） |
 | `/api/usage/totals`｜`/daily`｜`/requests`｜`/models`｜`/accounts` | GET | 用量与账号统计 |
 | `/api/prompts`、`/api/prompts/toggle` | GET / POST | 内置提示词（旧接口，保留兼容） |
@@ -178,12 +185,26 @@ Cookie 过期。网关会自动冷却该账号（10 分钟）并在日志里标�
 
 ---
 
-## 七、免责声明
+## 七、记忆（AI 更懂你）
+
+网关会**自动学习**你的使用习惯（零 LLM 调用、纯本地规则）：
+
+- **偏好**：常用模型会被记录（下次相关时提示）
+- **纠正**：你在对话里说"记住…"、"别再…"、"always/never"等会记为高权重纠正
+- **反馈**：推理档位被自动降级等事件
+
+记忆按当前问题**检索后注入**（本地全文索引，支持中文），预算 512 token、以低权威块标注，不会喧宾夺主。面板「记忆」页可以查看、手动添加、删除，或把某条标为"稳定事实"。
+
+> 隐私：记忆全部存在本地 `data/memory.sqlite`，不经过任何第三方；删除即彻底移除。
+
+---
+
+## 八、免责声明
 
 本项目与 OpenAI、Codebuff、Freebuff 无官方关联，相关商标版权归各自所有者。
 
 所有内容仅供交流、实验与学习使用，按「原样（As-Is）」提供，不构成生产服务或专业建议，使用者自行承担风险。
 
-## 八、开源协议
+## 九、开源协议
 
 MIT

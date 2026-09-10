@@ -79,7 +79,23 @@ docker run -d -p 47821:47821 -v /data:/data freebuff2api
 | `/api/logs/stream` | GET | 实时日志 SSE（支持 `Last-Event-ID` 断线补发；配 api_keys 时用 `?key=`） |
 | `/api/logs/recent` | GET | 最近日志（`?limit=200`） |
 | `/api/usage/requests/{id}` | GET | 单条请求详情（含遥测富字段与事件链） |
+| `/api/usage/cost` | GET | 速率与错误率（30 分钟滑窗；诚实标注 estimated） |
 | `/api/doctor` | GET | 系统体检（四态：ok/fault/unknown/fact） |
+
+### 记忆（AI 更懂用户）
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/memory` | GET | 记忆列表 + 统计（总数/稳定事实/纠正数） |
+| `/api/memory` | POST | 手动新增 `{kind, title, content, is_static?}` |
+| `/api/memory/delete` | POST | 删除 `{id}` |
+| `/api/memory/static` | POST | 标记/取消稳定事实 `{id, is_static}` |
+
+> 自动记录（零 LLM）：常用模型偏好、推理档位降级、用户纠正语句（"记住…/别再…/always/never"）。记忆按当前问题检索后注入 system 前缀（512 token 预算、低权威块）。
+
+### MCP（只读工具）
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/mcp` | POST | JSON-RPC 2.0（`initialize` / `tools/list` / `tools/call` / `ping`）；工具：`list_models`、`list_accounts`、`usage_summary`；鉴权与 /v1 一致 |
 
 ### 用量统计
 | 端点 | 方法 | 说明 |

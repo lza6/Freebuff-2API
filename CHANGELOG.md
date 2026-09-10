@@ -2,6 +2,30 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-11
+
+### 新增
+
+- **记忆层（AI 更懂用户）**：`data/memory.sqlite` 独立库；**零 LLM 规则 observe**（自动记录常用模型偏好、推理档位降级、用户纠正信号"记住…/别再…/always/never"）；trigram FTS5 中文检索；有界注入（512 token 预算、低权威标记、marker 转义、按 id 排序保字节稳定）；面板「记忆」页可查看/新增/删除/置为稳定事实。
+- **熔断三态**：账号池从"裸冷却时间戳"升级为 Closed/Open/HalfOpen 熔断器（连续失败 4 次断开，冷却随次数指数增长封顶 10 分钟，半开探测连续成功 2 次恢复）；`mark_success`/`mark_failure` 全程接线。
+- **请求级重试循环**：上游失败自动换号重试（最多 3 次，含 429/5xx/网络错误；401/403 冷却该账号后换号）；严格 committed 边界——只在尚未向客户端写出任何字节前重试。
+- **错误规则表**：文本优先 + 状态码兜底的上游错误分类（waiting_room/rate_limit/model_unavailable/auth_expired 等 8 类），带可重试判定与 Retry-After 提示。
+- **MCP 最小暴露**：`POST /mcp`（JSON-RPC 2.0，手写零新依赖）提供 3 个只读工具：`list_models` / `list_accounts` / `usage_summary`，供外部 agent（Claude Code/Cursor）直接查询网关状态。
+- **成本/速率可视化**：`GET /api/usage/cost`（30 分钟滑窗请求数/错误率/平均延迟/速率）；面板总览页显示速率行（诚实标注"免费层无货币成本"）。
+- **教学页（原理速览）**：面板新增「原理」Tab，6 节讲清网关工作原理（请求链路/多账号轮询/注入机制/黑匣子/广告保活/数据位置）。
+- **配置正式生效**：此前解析但零消费的 `fallback_models`（降级链）、`token_saver`（tool_result 压缩）已接线；新增 `memory_path` 配置。
+
+### 修复
+
+- **`compress_tool_result` 多字节 panic**：按字符边界切分（中文 tool_result 不再 panic；与 v0.3.0 修复的 tail 截断同类问题）。
+- **skills 库路径**：避开 `with_extension` 截断（目录名含 `.` 时路径错误）。
+- **`/v1/uploads` 错误体截断**：上游错误消息限 300 字符（防回显账号/内部细节）。
+
+### 工程
+
+- 新增模块：`memory.rs`（记忆层）、`mcp.rs`（MCP 只读服务）、`errors.rs`（错误规则表）、`pool.rs` 熔断器。
+- 测试：108 → **130+ 单元测试**（新增熔断器 4 / 记忆 9 / MCP 10 / 错误表 12 / 压缩多字节回归 1），clippy 零警告。
+
 ## [0.3.0] - 2026-09-11
 
 ### 新增

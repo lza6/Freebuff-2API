@@ -20,6 +20,7 @@ pub mod config;
 pub mod import;
 pub mod models;
 pub mod pool;
+pub mod prompts;
 pub mod router;
 pub mod session;
 pub mod upstream;

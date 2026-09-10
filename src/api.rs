@@ -33,6 +33,7 @@ pub struct AppState {
     pub router: Arc<ModelRouter>,
     pub usage: Arc<UsageDb>,
     pub ads: Arc<AdRefresher>,
+    pub prompts: Arc<crate::prompts::PromptManager>,
     pub started: std::time::Instant,
 }
 
@@ -59,6 +60,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/account/balance", get(handle_account_balance))
         .route("/api/account/detail", axum::routing::post(handle_account_detail))
         .route("/v1/web/chat", axum::routing::post(handle_web_chat))
+        .route("/api/prompts", get(handle_prompts_list))
+        .route("/api/prompts/toggle", axum::routing::post(handle_prompts_toggle))
         .merge(api)
         .with_state(state)
 }
@@ -204,6 +207,42 @@ async fn handle_account_balance(State(st): State<AppState>) -> Response {
 fn load_imported_token() -> Option<String> {
     crate::import::load_tokens("data/tokens.json").ok().and_then(|t| t.into_iter().next()).map(|t| t.token)
 }
+/// 统一 500 JSON 错误响应
+/// GET /api/prompts — 列出内置提示词与技能（含启用状态）
+async fn handle_prompts_list(State(st): State<AppState>) -> Response {
+    Json(serde_json::json!({
+        "ok": true,
+        "prompts": st.prompts.prompts_snapshot().await,
+        "skills": st.prompts.skills_snapshot().await,
+        "system_prefix_preview": st.prompts.system_prefix().await,
+    }))
+    .into_response()
+}
+
+/// POST /api/prompts/toggle — body: { type: "prompt"|"skill", id, enabled }
+async fn handle_prompts_toggle(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": "invalid json" }))).into_response(),
+    };
+    let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("prompt");
+    let id = parsed.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let enabled = parsed.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = if kind == "skill" {
+        st.prompts.set_skill_enabled(id, enabled).await
+    } else {
+        st.prompts.set_prompt_enabled(id, enabled).await
+    };
+    Json(serde_json::json!({
+        "ok": ok,
+        "kind": kind,
+        "id": id,
+        "enabled": enabled,
+        "system_prefix_preview": st.prompts.system_prefix().await,
+    }))
+    .into_response()
+}
+
 fn internal_err(e: &anyhow::Error) -> Response {
     tracing::error!("用量统计查询失败: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
@@ -517,9 +556,16 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
         }
     };
 
-    // 配置上行 body：设 model + 思考程度降级/剥离 + codebuff_metadata 注入
+    // 配置上行 body：设 model + 思考程度降级/剥离 + 内置提示词/技能注入 + codebuff_metadata 注入
     let mut up_body = parsed.clone();
     up_body["model"] = serde_json::json!(model);
+    // 内置提示词+技能注入（system 消息前插）
+    let sys_prefix = st.prompts.system_prefix().await;
+    if !sys_prefix.trim().is_empty() {
+        if let Some(messages) = up_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            messages.insert(0, serde_json::json!({ "role": "system", "content": sys_prefix }));
+        }
+    }
     if let Some(effort) = up_body.get("reasoning_effort").and_then(|v| v.as_str()) {
         match st.router.clamp_effort(&model, effort) {
             Some(clamped) => {

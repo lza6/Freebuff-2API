@@ -57,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
     // 广告保活
     let ads = Arc::new(AdRefresher::new(client.clone(), cfg.clone()));
 
+    // 内置提示词/技能
+    let prompts = Arc::new(freebuff2api::prompts::PromptManager::new());
+
     // 启动各账号后台保活
     {
         let accounts = pool.accounts.lock().await;
@@ -75,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         router,
         usage,
         ads,
+        prompts,
         started: std::time::Instant::now(),
     };
 

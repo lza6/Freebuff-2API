@@ -29,11 +29,12 @@ const WAITING_ROOM_STRONG: &[&str] = &["waiting_room", "waiting room", "排队"]
 const WAITING_ROOM_WEAK: &[&str] = &["queue"];
 /// 限流关键词
 const RATE_LIMIT_HINTS: &[&str] = &["rate limit", "rate_limit", "too many requests", "限流"];
-/// 模型不可用关键词
+/// 模型不可用关键词（收窄：避免 503 "Service Unavailable" 被误判为模型问题）
 const MODEL_UNAVAILABLE_HINTS: &[&str] = &[
     "invalid_agent_model",
     "free_mode_invalid",
-    "not available",
+    "model not available",
+    "only available for",
     "model_not_found",
     "no such model",
 ];

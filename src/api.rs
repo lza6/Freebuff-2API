@@ -1073,6 +1073,44 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     if !is_stream {
         let bytes = upstream_resp.bytes().await.unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes).to_string();
+        // 上游可能在 HTTP 200 的 body 里返回错误码（free_mode_* 系列）——识别并视为上游错误
+        if let Some(code) = upstream_body_error(&text) {
+            let total_ms = start.elapsed().as_millis() as u64;
+            usage_db.record_ex(&acc, &mdl, 0, 0, total_ms as i64, 502, &key, &ip, &rid).ok();
+            st.telemetry.event(&rid, "upstream_body_error", code);
+            telem.record(TraceRow {
+                req_id: rid.clone(),
+                endpoint: "/v1/chat/completions".into(),
+                requested_model: requested.clone(),
+                resolved_model: mdl.clone(),
+                account: acc.clone(),
+                status: 502,
+                latency_ms: total_ms,
+                ttft_ms: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stream: false,
+                error_kind: Some("upstream_5xx".into()),
+                error_excerpt: Some(crate::errors::error_excerpt(&text)),
+                route_reason: None,
+                api_key: Some(key.clone()),
+                client_ip: Some(ip.clone()),
+            });
+            logs.emit("warn", "request", Some(&rid), format!("{mdl} 上游 200 但 body 含错误码 {code}"));
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": format!("upstream returned error in 200 body: {code}"),
+                        "type": "upstream_error",
+                        "code": code,
+                        "model": mdl,
+                        "upstream": st.client.base_url(),
+                    }
+                })),
+            )
+                .into_response();
+        }
         let (pt, ct) = extract_usage(&text).unwrap_or((0, 0));
         let total_ms = start.elapsed().as_millis() as u64;
         usage_db
@@ -2101,6 +2139,16 @@ async fn build_system_prefix(st: &AppState, query: &str) -> String {
         }
     }
     s
+}
+
+/// 上游 200 响应体内嵌错误码检测（已知 free_mode_* 系列；正常响应不受影响）
+fn upstream_body_error(text: &str) -> Option<&'static str> {
+    const CODES: &[&str] = &[
+        "free_mode_invalid_agent_model",
+        "free_mode_invalid_agent_hierarchy",
+        "free_mode_cli_required",
+    ];
+    CODES.iter().find(|c| text.contains(**c)).copied()
 }
 
 /// 安全保留字符串尾部约 `keep_bytes` 字节，且起点落在字符边界上。

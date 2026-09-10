@@ -47,10 +47,14 @@ async function check(name, fn) {
     return r.status === 200 && j.data.length >= 20;
   });
 
-  // 3. 面板
+  // 3. 面板（注意：HTML 是浏览器端 JS 动态渲染按钮，服务端只返回脚本源码；
+//    这里校验「渲染 6 prompt + 5 skill 按钮」所需的源码锚点都齐全）
   await check("GET /ui 面板 200 + 含提示词管理", async () => {
     const r = await req("GET", "/ui");
-    return r.status === 200 && r.body.includes("内置提示词") && r.body.includes("togglePrompt");
+    const srcHasPromptsLoop = r.body.includes("pd.prompts") && r.body.includes("togglePrompt('prompt'");
+    const srcHasSkillsLoop = r.body.includes("pd.skills") && r.body.includes("togglePrompt('skill'");
+    const srcHasToggleFn = r.body.includes("async function togglePrompt");
+    return r.status === 200 && r.body.includes("内置提示词") && srcHasPromptsLoop && srcHasSkillsLoop && srcHasToggleFn;
   });
 
   // 4. 用量统计
@@ -131,11 +135,11 @@ async function check(name, fn) {
     });
   });
 
-  // 14. 思考程度降级（solar-pro4 不支持 effort → 应剥离后仍请求）
+  // 14. 思考程度降级（solar-pro4 不支持 effort → 应剥离后仍请求；status 0=网络断需排除）
   await check("POST /v1/chat/completions solar-pro4+max effort → 上游协议层处理", async () => {
     const r = await req("POST", "/v1/chat/completions", { model: "upstage/solar-pro4", messages: [{ role: "user", content: "hi" }], reasoning_effort: "max" });
-    // 无论上游结果如何，网关不应 500（剥离逻辑生效）
-    return r.status !== 500;
+    // 剥离逻辑生效：不应 500；status=0 表示请求未发出（网络/服务不可达），不算通过
+    return r.status !== 0 && r.status !== 500;
   });
 
   console.log("========== E2E 验收结果 ==========");

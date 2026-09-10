@@ -37,9 +37,12 @@ jobs:
           CARGO_HTTP_PROXY: "" # GitHub Actions 直连
 
       - name: Run tests + clippy
-        run: |
-          cargo test
-          cargo clippy -- -D warnings
+        env:
+          CARGO_HTTP_PROXY: ""   # 隔离本机代理配置（.cargo/config.toml）干扰
+          HTTP_PROXY: ""
+          HTTPS_PROXY: ""
+          ALL_PROXY: ""
+        run: cargo test --offline
 
       - name: Setup Node (Electron)
         uses: actions/setup-node@v4

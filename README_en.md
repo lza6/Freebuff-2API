@@ -31,7 +31,7 @@ cargo build --release
 ### Docker
 ```bash
 docker build -t freebuff2api -f docker/Dockerfile .
-docker run -d -p 8787:8787 -v /data:/data freebuff2api
+docker run -d -p 47821:47821 -v /data:/data freebuff2api
 ```
 
 ## API

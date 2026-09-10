@@ -31,7 +31,7 @@ cargo run --release -- --config config.json
 
 ```jsonc
 {
-  "listen_addr": "127.0.0.1:8787",     // 监听地址（桌面版固定本机）
+  "listen_addr": "127.0.0.1:47821",     // 监听地址（桌面版固定本机）
   "upstream_base_url": "https://www.codebuff.com",
   "auth_tokens": ["token1","token2"],  // 多账号轮询
   "api_keys": ["sk-local"],            // 网关鉴权（空则不校验）

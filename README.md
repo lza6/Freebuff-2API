@@ -35,14 +35,14 @@ start.bat                      # Windows 启动
 ### Docker
 ```bash
 docker build -t freebuff2api -f docker/Dockerfile .
-docker run -d -p 8787:8787 -v /data:/data freebuff2api
+docker run -d -p 47821:47821 -v /data:/data freebuff2api
 ```
 
 ## 配置（config.json）
 
 ```jsonc
 {
-  "listen_addr": "127.0.0.1:8787",
+  "listen_addr": "127.0.0.1:47821",
   "upstream_base_url": "https://www.codebuff.com",
   "auth_tokens": ["bearer-token-1", "bearer-token-2"],
   "api_keys": ["sk-local"],

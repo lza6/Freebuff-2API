@@ -109,3 +109,49 @@ fn config_timeout_sec() -> u64 {
     let _ = Duration::from_secs(60);
     900
 }
+#[test]
+fn pool_pick_best_and_cooldown() {
+    use freebuff2api::pool::{AccountEntry, Pool};
+    use freebuff2api::session::SessionManager;
+    use freebuff2api::upstream::UpstreamClient;
+    use std::sync::Arc;
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let cfg = Config { skip_upstream_check: true, ..Default::default() };
+        let client = Arc::new(
+            UpstreamClient::new("https://www.codebuff.com".into(), None, Duration::from_secs(30)).unwrap(),
+        );
+        let mk = |name: &str, token: &str| AccountEntry {
+            name: name.into(),
+            token: token.into(),
+            session: Arc::new(SessionManager::new(client.clone(), token.into(), cfg.clone())),
+            score: tokio::sync::RwLock::new(0.0),
+            cooldown_until: tokio::sync::RwLock::new(None),
+        };
+        let pool = Pool::new(&cfg, client.clone());
+        // 池为空（Config::default 无 token）时 pick_best 应返回 None
+        assert!(pool.pick_best().await.is_none());
+
+        assert!(pool.add_account(mk("a1", "tok-a")).await);
+        assert!(pool.add_account(mk("a2", "tok-b")).await);
+        // 重复 token 不得再次加入
+        assert!(!pool.add_account(mk("a1dup", "tok-a")).await);
+
+        // 评分高者优先
+        pool.update_score("a2", 50.0).await;
+        let best = pool.pick_best().await.unwrap();
+        assert_eq!(best.name, "a2");
+
+        // 冷却后应被跳过，回落到 a1
+        pool.mark_cooldown("a2", Duration::from_secs(600), "test").await;
+        let best2 = pool.pick_best().await.unwrap();
+        assert_eq!(best2.name, "a1");
+
+        // 快照反映总数与健康状态
+        let snap = pool.snapshot().await;
+        assert_eq!(snap.total, 2);
+        let a2 = snap.accounts.iter().find(|x| x.name == "a2").unwrap();
+        assert!(!a2.healthy || a2.cooldown_until.is_some());
+    });
+}

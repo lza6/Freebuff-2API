@@ -132,3 +132,70 @@ pub fn truncate_to_tokens(s: &str, approx_tokens: usize) -> String {
 async fn plausible_model(_registry: &ModelRegistry, _name: &str) -> Result<bool> {
     Ok(true)
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ModelRegistry;
+    use std::sync::Arc;
+
+    fn router() -> ModelRouter {
+        ModelRouter::new(Arc::new(ModelRegistry::new()), RouterConfig::default())
+    }
+
+    #[test]
+    fn clamp_effort_within_range_kept() {
+        let r = router();
+        // glm 支持 low/high/max
+        assert_eq!(r.clamp_effort("z-ai/glm-5.3-flash", "high").as_deref(), Some("high"));
+        assert_eq!(r.clamp_effort("z-ai/glm-5.3-flash", "low").as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn clamp_effort_over_range_downgrades() {
+        let r = router();
+        // glm 上限是 max，请求 xhigh → 取上限 max；gpt 支持到 max
+        assert_eq!(r.clamp_effort("z-ai/glm-5.3-flash", "xhigh").as_deref(), Some("max"));
+        // muse 上限 xhigh，请求 max → xhigh
+        assert_eq!(r.clamp_effort("meta/muse-spark-x", "max").as_deref(), Some("xhigh"));
+        // muse 下限 minimal，请求 low 有效但 minimal 是首项
+        assert_eq!(r.clamp_effort("meta/muse-spark-x", "minimal").as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn clamp_effort_unsupported_model_returns_none() {
+        let r = router();
+        // solar/minimax/mimo/kimi 不支持 effort
+        assert!(r.clamp_effort("upstage/solar-pro4", "max").is_none());
+        assert!(r.clamp_effort("minimax/minimax-m3", "high").is_none());
+    }
+
+    #[test]
+    fn clamp_effort_unknown_value_falls_back() {
+        let r = router();
+        // 未知档位 → 取支持列表第一项
+        assert_eq!(r.clamp_effort("z-ai/glm-5.3-flash", "bogus").as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn supports_reasoning_prefixes() {
+        let r = router();
+        assert!(r.supports_reasoning("deepseek/deepseek-v4-flash"));
+        assert!(r.supports_reasoning("z-ai/glm-5.3-flash"));
+        assert!(!r.supports_reasoning("upstage/solar-pro4"));
+    }
+
+    #[test]
+    fn compress_short_content_untouched() {
+        let s = "short";
+        assert_eq!(compress_tool_result(s, 100), "short");
+    }
+
+    #[test]
+    fn compress_long_content_keeps_head_tail() {
+        let s = "a".repeat(1000);
+        let out = compress_tool_result(&s, 100);
+        assert!(out.len() < 1000);
+        assert!(out.contains("已压缩"));
+        assert!(out.starts_with("aaa"));
+    }
+}

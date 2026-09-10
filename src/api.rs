@@ -1022,3 +1022,126 @@ fn remove_passthrough_fields(body: &mut serde_json::Value) {
         obj.remove("stream_options");
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_messages_text_blocks_flattened() {
+        // Claude content blocks 数组 → OpenAI content 字符串
+        let msgs = serde_json::json!([
+            { "role": "user", "content": [
+                { "type": "text", "text": "hello" },
+                { "type": "text", "text": "world" }
+            ]}
+        ]);
+        let out = claude_to_openai_messages(msgs);
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["role"], "user");
+        assert_eq!(arr[0]["content"], "hello\nworld");
+    }
+
+    #[test]
+    fn claude_tool_use_to_tool_calls() {
+        // assistant 的 tool_use 块 → OpenAI assistant.tool_calls
+        let msgs = serde_json::json!([
+            { "role": "assistant", "content": [
+                { "type": "text", "text": "let me check" },
+                { "type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": { "city": "SF" } }
+            ]}
+        ]);
+        let out = claude_to_openai_messages(msgs);
+        let a = &out.as_array().unwrap()[0];
+        assert_eq!(a["role"], "assistant");
+        assert_eq!(a["content"], "let me check");
+        let tc = &a["tool_calls"][0];
+        assert_eq!(tc["id"], "toolu_1");
+        assert_eq!(tc["function"]["name"], "get_weather");
+        assert!(tc["function"]["arguments"].as_str().unwrap().contains("SF"));
+    }
+
+    #[test]
+    fn claude_tool_result_to_tool_role() {
+        // user 的 tool_result 块 → OpenAI role=tool 消息
+        let msgs = serde_json::json!([
+            { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_1", "content": "18C sunny" }
+            ]}
+        ]);
+        let out = claude_to_openai_messages(msgs);
+        let a = &out.as_array().unwrap()[0];
+        assert_eq!(a["role"], "tool");
+        assert_eq!(a["tool_call_id"], "toolu_1");
+        assert_eq!(a["content"], "18C sunny");
+    }
+
+    #[test]
+    fn openai_response_to_claude_shape() {
+        let oai = serde_json::json!({
+            "id": "chatcmpl-1",
+            "choices": [{ "message": { "role": "assistant", "content": "hi there" }, "finish_reason": "stop" }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 3 }
+        });
+        let c = openai_to_claude_response(&oai, "z-ai/glm-5.3-flash");
+        assert_eq!(c["type"], "message");
+        assert_eq!(c["role"], "assistant");
+        assert_eq!(c["stop_reason"], "end_turn");
+        assert_eq!(c["content"][0]["type"], "text");
+        assert_eq!(c["content"][0]["text"], "hi there");
+        assert_eq!(c["usage"]["input_tokens"], 10);
+        assert_eq!(c["usage"]["output_tokens"], 3);
+    }
+
+    #[test]
+    fn openai_tool_calls_to_claude_tool_use() {
+        let oai = serde_json::json!({
+            "id": "chatcmpl-2",
+            "choices": [{ "message": { "role": "assistant", "content": null, "tool_calls": [
+                { "id": "call_1", "type": "function", "function": { "name": "lookup", "arguments": "{\"q\":\"x\"}" } }
+            ]}, "finish_reason": "tool_calls" }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1 }
+        });
+        let c = openai_to_claude_response(&oai, "m");
+        assert_eq!(c["stop_reason"], "tool_use");
+        assert_eq!(c["content"][0]["type"], "tool_use");
+        assert_eq!(c["content"][0]["name"], "lookup");
+        assert_eq!(c["content"][0]["input"]["q"], "x");
+    }
+
+    #[test]
+    fn mask_hides_middle() {
+        let m = mask("sk-abcdefghijklmnop1234");
+        assert!(m.starts_with("sk-abc"));
+        assert!(m.ends_with("1234"));
+        assert!(m.contains("..."));
+        // 短 token 不 panic
+        assert!(mask("abc").ends_with("***"));
+    }
+
+    #[test]
+    fn loopback_detection_by_proxy_headers() {
+        let mut h = HeaderMap::new();
+        assert!(is_loopback_request(&h));
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert!(!is_loopback_request(&h));
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-real-ip", "1.2.3.4".parse().unwrap());
+        assert!(!is_loopback_request(&h2));
+    }
+
+    #[test]
+    fn authorized_accepts_bearer_and_x_api_key() {
+        let keys = vec!["sk-local".to_string()];
+        let mut h = HeaderMap::new();
+        assert!(!authorized(&h, &keys));
+        h.insert("authorization", "Bearer sk-local".parse().unwrap());
+        assert!(authorized(&h, &keys));
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-api-key", "sk-local".parse().unwrap());
+        assert!(authorized(&h2, &keys));
+        let mut h3 = HeaderMap::new();
+        h3.insert("authorization", "Bearer wrong".parse().unwrap());
+        assert!(!authorized(&h3, &keys));
+    }
+}

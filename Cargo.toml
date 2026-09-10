@@ -14,8 +14,6 @@ path = "src/main.rs"
 axum = { version = "0.8", features = ["json", "ws", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-hyper = { version = "1", features = ["full"] }
 http = "1"
 
 # 序列化
@@ -23,15 +21,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # 数据库（用量统计）
-sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "macros"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # 异步与任务
 futures = "0.3"
-async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-tokio-util = "0.7"
 
 # 网络
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "brotli", "socks", "multipart", "cookies"] }
@@ -42,17 +37,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 
-# 流式 SSE
-eventsource-stream = "0.2"
-async-stream = "0.3"
-
 # 工具
-lazy_static = "1"
 regex = "1"
 rand = "0.8"
-base64 = "0.22"
-sha2 = "0.10"
-hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

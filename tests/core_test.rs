@@ -100,8 +100,7 @@ fn usage_db_roundtrip() {
 #[test]
 fn timeout_env_duration() {
     // 回归：REQUEST_TIMEOUT=15m 应解析为 900s
-    let mut cfg = Config::default();
-    cfg.request_timeout_sec = parse_duration_sec("15m").unwrap();
+    let cfg = Config { request_timeout_sec: parse_duration_sec("15m").unwrap(), ..Default::default() };
     assert_eq!(cfg.request_timeout_sec, 900);
     assert_eq!(config_timeout_sec(), 900);
 }

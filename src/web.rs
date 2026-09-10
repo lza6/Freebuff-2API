@@ -142,15 +142,6 @@ async function refresh(){
       panel.innerHTML+=html;
       document.querySelector('.grid').after(panel);
     }).catch(()=>{});
-  }catch(e){ toast('加载失败: '+e.message); }
-}
-async function togglePrompt(type,id,enabled){
-  try{
-    const r=await fetch('/api/prompts/toggle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type,id,enabled})});
-    if(!r.ok) throw new Error(await r.text());
-    refresh();
-  }catch(e){ toast('操作失败: '+e.message); }
-}
     // 账号余额
     fetch('/api/account/balance').then(r=>r.json()).then(bal=>{
       if(bal && bal.ok!==false){
@@ -170,6 +161,13 @@ async function togglePrompt(type,id,enabled){
       }
     }).catch(()=>{});
   }catch(e){ toast('加载失败: '+e.message); }
+}
+async function togglePrompt(type,id,enabled){
+  try{
+    const r=await fetch('/api/prompts/toggle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type,id,enabled})});
+    if(!r.ok) throw new Error(await r.text());
+    refresh();
+  }catch(e){ toast('操作失败: '+e.message); }
 }
 refresh();
 setInterval(refresh,5000);

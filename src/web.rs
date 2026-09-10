@@ -129,6 +129,28 @@ async function refresh(){
     // models
     const mb=document.getElementById('models'); mb.innerHTML='';
     (models||[]).forEach(m=>mb.append(Object.assign(el('span','chip'),{textContent:m})));
+    // 提示词/技能面板
+    fetch('/api/prompts').then(r=>r.json()).then(pd=>{
+      if(!pd || !pd.prompts) return;
+      const panel=document.createElement('div'); panel.className='panel'; panel.style.marginTop='24px';
+      panel.innerHTML='<h2>🧠 内置提示词 & 技能</h2>';
+      let html='<table><thead><tr><th>名称</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+      for(const p of pd.prompts){ html+=`<tr><td>${p.name}</td><td>提示词</td><td>${p.enabled?'✅':'⬜'}</td><td><button class="ghost" onclick="togglePrompt('prompt','${p.id}',${!p.enabled})">${p.enabled?'禁用':'启用'}</button></td></tr>`; }
+      for(const s of pd.skills){ html+=`<tr><td>${s.name}</td><td>技能</td><td>${s.enabled?'✅':'⬜'}</td><td><button class="ghost" onclick="togglePrompt('skill','${s.id}',${!s.enabled})">${s.enabled?'禁用':'启用'}</button></td></tr>`; }
+      html+='</tbody></table>';
+      html+=`<p style="color:var(--muted);font-size:12px">system 前缀预览（注入聊天）:<br><code style="white-space:pre-wrap;display:block;background:#21262d;padding:8px;border-radius:6px">${(pd.system_prefix_preview||'').slice(0,300)}</code></p>`;
+      panel.innerHTML+=html;
+      document.querySelector('.grid').after(panel);
+    }).catch(()=>{});
+  }catch(e){ toast('加载失败: '+e.message); }
+}
+async function togglePrompt(type,id,enabled){
+  try{
+    const r=await fetch('/api/prompts/toggle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type,id,enabled})});
+    if(!r.ok) throw new Error(await r.text());
+    refresh();
+  }catch(e){ toast('操作失败: '+e.message); }
+}
     // 账号余额
     fetch('/api/account/balance').then(r=>r.json()).then(bal=>{
       if(bal && bal.ok!==false){

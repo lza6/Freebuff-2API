@@ -1842,7 +1842,11 @@ async fn handle_upload(State(_st): State<AppState>, headers: HeaderMap, body: ax
             }))
             .into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": { "message": e.to_string(), "type": "upstream_error" } }))).into_response(),
+        Err(e) => {
+            // 截断上游错误体（防泄露账号/内部细节）
+            let msg: String = e.to_string().chars().take(300).collect();
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": { "message": msg, "type": "upstream_error" } }))).into_response()
+        }
     }
 }
 

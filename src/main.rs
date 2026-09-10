@@ -66,10 +66,9 @@ async fn main() -> anyhow::Result<()> {
     let logs = Arc::new(LogBus::new(500));
 
     // 技能系统（文件为真相源 + SQLite 索引；旧 prompts 保留兼容）
-    let skills = Arc::new(SkillsManager::open(
-        PathBuf::from(&cfg.skills_dir),
-        PathBuf::from(&cfg.skills_dir).with_extension("sqlite"),
-    )?);
+    // 注意：不用 with_extension（目录名含 '.' 时会被截断，如 data/my.skills → data/my.sqlite）
+    let skills_db = PathBuf::from(format!("{}.sqlite", cfg.skills_dir.trim_end_matches(['/', '\\'])));
+    let skills = Arc::new(SkillsManager::open(PathBuf::from(&cfg.skills_dir), skills_db)?);
     tracing::info!("技能目录: {}（已载入 {} 条）", cfg.skills_dir, skills.list().len());
 
     // 广告保活

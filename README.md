@@ -21,7 +21,7 @@ Freebuff2API 将 [Freebuff](https://freebuff.com) 免费层逆向为 **OpenAI �
 ## 快速开始
 
 ### 桌面版（推荐）
-1. 下载 `Freebuff2API Setup 0.1.0.exe`（Release 页）
+1. 下载 `Freebuff2API Setup 0.2.0.exe`（Release 页）
 2. 安装后双击 → 自动拉起网关 + 打开控制台
 3. 托盘「一键登录新账号」→ 浏览器登录 freebuff.com → 自动抓 Cookie 入库
 
@@ -88,7 +88,7 @@ docker run -d -p 47821:47821 -v /data:/data freebuff2api
 ## 测试与验证
 
 ```bash
-cargo test        # 12 项测试全绿
+cargo test        # 32 项测试全绿（24 单元 + 8 集成）
 cargo clippy      # 零警告
 ```
 
@@ -100,8 +100,6 @@ cargo clippy      # 零警告
 src/                Rust 网关源码
   api.rs            HTTP 路由
   web_protocol.rs   web 版协议（Cookie 鉴权 chat/stream/余额）
-  concurrency.rs    双桶并发信号量
-  cache.rs          会话缓存
   import.rs         token 导入解析
   usage.rs          SQLite 用量统计
 desktop/            Electron 桌面壳

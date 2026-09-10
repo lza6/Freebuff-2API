@@ -5,7 +5,7 @@ Rust 版 OpenAI/Anthropic 兼容网关 + 多账号轮询 + 余额查询 + 桌面
 ## 快速开始
 
 ### 方式一：桌面安装包（推荐）
-1. 下载 `Freebuff2API Setup 0.1.0.exe`（Release 页）
+1. 下载 `Freebuff2API Setup 0.2.0.exe`（Release 页）
 2. 安装后双击桌面快捷方式 → 自动拉起网关 + 打开控制台
 3. 托盘「一键登录新账号」→ 浏览器登录 freebuff.com → 自动抓 Cookie 入库
 

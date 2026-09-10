@@ -1,7 +1,7 @@
 // 最终 E2E 验收脚本：覆盖全部端点
 const http = require("node:http");
 
-const BASE = { host: "127.0.0.1", port: 8788 };
+const BASE = { host: "127.0.0.1", port: 47821 };
 let pass = 0, fail = 0;
 const results = [];
 

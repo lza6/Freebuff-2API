@@ -11,7 +11,7 @@ const https = require('node:https');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const GATEWAY_PORT = 8787;
+const GATEWAY_PORT = 47821;
 const GATEWAY_URL = `http://127.0.0.1:${GATEWAY_PORT}`;
 
 // 定位网关二进制（安装目录或开发目录）
@@ -64,7 +64,7 @@ function startGateway() {
   // 若用户未配置 config.json，则用默认（带空 token 也能启动）
   if (!fs.existsSync(configPath)) {
     fs.writeFileSync(configPath, JSON.stringify({
-      listen_addr: '127.0.0.1:8787',
+      listen_addr: '127.0.0.1:47821',
       upstream_base_url: 'https://www.codebuff.com',
       auth_tokens: [],
       sqlite_path: path.join(app.getPath('userData'), 'freebuff2api.sqlite').replace(/\\/g, '/'),

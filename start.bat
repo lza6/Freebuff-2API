@@ -17,8 +17,8 @@ echo ==========================================
 echo   Freebuff2API v0.1.0 (Rust Gateway)
 echo ==========================================
 echo   [OK] Using config.json
-echo   [UI]  http://127.0.0.1:8787/ui
-echo   [HZ]  http://127.0.0.1:8787/healthz
+echo   [UI]  http://127.0.0.1:47821/ui
+echo   [HZ]  http://127.0.0.1:47821/healthz
 echo.
 echo   Press Ctrl+C to stop. Window stays open.
 echo.

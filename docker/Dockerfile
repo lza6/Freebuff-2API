@@ -12,7 +12,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/freebuff2api /usr/local/bin/freebuff2api
-ENV PORT=8787
+ENV PORT=47821
 VOLUME ["/data"]
-EXPOSE 8787
+EXPOSE 47821
 ENTRYPOINT ["freebuff2api", "--config", "/data/config.json"]

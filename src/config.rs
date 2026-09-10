@@ -8,7 +8,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// 监听地址，默认 127.0.0.1:8787（本地软件默认仅本机）
+    /// 监听地址，默认 127.0.0.1:47821（本地软件默认仅本机）
     pub listen_addr: String,
     /// 上游 API 地址
     pub upstream_base_url: String,
@@ -41,7 +41,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            listen_addr: "127.0.0.1:8787".into(),
+            listen_addr: "127.0.0.1:47821".into(),
             upstream_base_url: "https://www.codebuff.com".into(),
             auth_tokens: vec![],
             api_keys: vec![],

@@ -7,8 +7,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # GHCR 仓库名必须全小写；github.repository 保留原大小写（Freebuff-2API）会解析失败
-  IMAGE_NAME: freebuff2api
+  # GHCR 包名规则：${github.repository}/${name} → ghcr.io/lza6/freebuff2api。
+  # 直接用小写子串是不行的（漏掉 owner），所以在此组合成完整小写全名。
+  # 注意：github.repository 是 lza6/Freebuff-2API（含大写）不能用，
+  # 需要显式 owner 如下。
+  IMAGE_NAME: lza6/freebuff2api
 
 jobs:
   build:

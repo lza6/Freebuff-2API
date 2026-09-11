@@ -1,43 +1,55 @@
 # Workflow Status — Freebuff2API
 
 > 单一状态源（长期任务恢复 / 节点协作 / 最终验收）。只记录事实与证据。
-> Phase G（v0.5.0）已完结发布；Phase H（v0.6.0 收尾）实施完毕待审查放行。
-> **Phase I（2026-09-11 启动，用户追加）**：全功能真实 E2E 矩阵——token 保活 / 模型列表 / 工具调用 / 缓存（多轮 thread 复用）/ 长 agent 能力。
+> Phase G（v0.5.0）、Phase H+I（v0.6.0）已发布；当前跟踪 **Phase J（v0.7.0，内嵌浏览器一键登录）**。
 
-## Phase I Task Graph（全功能真实 E2E 矩阵）
+## Task Contract — Phase J（2026-09-11 启动）
 
-| ID | 目标 | 验证方式 | 状态 |
-|----|------|----------|------|
-| I1 | **token 保活**：保活检查端点真实运行 | 真实凭证调 `/api/account/refresh` → 凭证有效 + 短期 token 已刷新 | ✅ DONE |
-| I2 | **模型列表**：`/v1/models` 全链路 | 断言模型数 >0、字段完整、含目标模型、与 /api/guide 一致 | ✅ DONE |
-| I3 | **工具调用能力**：web_search/read_url 经桥接透传 | 真实对话触发联网搜索 → 200 + 工具/正文/思考全透传 | ✅ DONE |
-| I4 | **缓存/多轮上下文**：同 thread 跨请求记忆 + 复用 | 三轮对话答出代号 + thread 绑定 turns>0 | ✅ DONE |
-| I5 | **长 agent 能力**：长任务 + 长输出 | 搜索+500 字总结 → 200 + 内容 >400 字 + 分条结构 | ✅ DONE |
-| I6 | **Anthropic 协议流式**：/v1/messages 事件流 | message_start/content_block_delta/message_stop 三件套 + 内容非空 | ✅ DONE |
-| I7 | E2E 落盘 `tests/e2e_phase_i.cjs`（18 断言，可重复） | 退出码 0 | ✅ DONE |
+- **用户核心诉求（原文）**：「一键登录只能用扩展这种东西吗？不能直接用内联浏览器去抓取？扩展的话用户不经常用啊」
+- **目标**：浏览器版用户不装扩展也能一键登录——网关内置内嵌浏览器窗口（WebView2），登录完成后自动抓取 Cookie（含 HttpOnly）入库。
+- **授权**：全部。
 
-**Phase I 执行记录（2026-09-11）**：首跑 15/18（第 4 节 3 失败 = **测试脚本自身 bug**——`json()` helper 双重包装 body 导致网关收到 `{body:{...}}`，model 字段为空；非产品缺陷）。修正脚本后重跑 **18/18 全过**，并回归 phase_g 46/46 + 单测 213 全绿。真实消耗上游额度（多轮真实对话 + 2 次联网搜索）。
+## 技术决策（已评估）
 
-## Next Gate
+| 方案 | 结论 |
+|------|------|
+| **WebView2 内嵌（选定）** | 本机已装 WebView2 Runtime 151.x（`C:/Program Files (x86)/Microsoft/EdgeWebView/`）；`webview2-com`/`wry` 可用；能拿到 HttpOnly Cookie（ICoreWebView2CookieManager 可读 HttpOnly，与 Electron `session.cookies` 同级能力）；Rust 原生、零 Node 依赖 |
+| Chrome/Edge CDP（remote-debugging） | 需用户重启浏览器带 `--remote-debugging-port`，体验差且新版 Chrome 限制 `--user-data-dir` 默认目录，放弃 |
+| 扩展（v0.5.0 已交付） | 保留为备选路径（Linux/macOS 用户 WebView2 不可用） |
+| Electron 桌面版 | 已有同款实现（desktop/main.js:219-293），行为基准：登录窗口 → did-navigate 检测 /chat|/account|/web → 抓 cookie → POST /api/tokens/import |
 
-- **Phase H + Phase I 已完结**：v0.6.0 已发布（commit 1435a8f）。剩余 backlog：桥接错误检测点前移（StreamEncoder 旁路）、SSE 攒批提交、web 版 agent-runs/stream、web 版广告链、扩展真实浏览器人工验证。
+## Phase J Task Graph
 
-## 明确不做（记录理由）
+| ID | 目标 | 交付物 | 状态 |
+|----|------|--------|------|
+| J1 | WebView2 登录窗口模块（同二进制 `--login-window` 子进程模式，避免阻塞网关 tokio 运行时） | `src/login_window.rs`（216 单测全绿） | ✅ DONE |
+| J2 | 登录完成检测（Cookie 含 session-token 即成功，600ms 轮询 + 10 分钟超时） | 同上 | ✅ DONE |
+| J3 | 自动入库（POST /api/tokens/import，多端口探测，连接失败换端口/明确拒绝即停） | 同上 | ✅ DONE |
+| J4 | 登录路径优先级统一：方案 A=内嵌窗口（openEmbedLogin → /api/login/embed）> 扩展直连 > 方案 B=剪贴板 > 手动向导 | `src/web.rs` + `src/api.rs` | ✅ DONE |
+| J5 | 降级链：WebView2 初始化失败 → 明确报错提示装 Runtime 或用扩展/手动向导 | map_err 文案 | ✅ DONE |
+| J6 | **真实 E2E（已完成两轮真实窗口验证）**：① 窗口真实弹出 + WebView2 真实渲染 + 用户关窗 → stderr 正确输出"窗口已关闭但未完成登录"（report(1) 真实执行）；② 60s 未登录 → timeout 124（超时语义正确）；③ 全程网关不受影响（healthz 200）、凭证文件未被误改。**完整成功路径（人工登录 GitHub → 自动入库）需用户配合一次** | 证据（本文件） | 部分 DONE |
+| J7 | 独立审查 + 修复 | 报告 | PENDING |
+| J8 | CHANGELOG/README + 发布 v0.7.0 | release | PENDING |
 
-- **web 版 agent-runs/stream（项目页构建模式）**：属新协议面（web 项目页），当前产品形态（对话网关）不覆盖，需先做协议逆向验证；记入 backlog。
-- **web 版广告链（/api/ads + imprezia + paidNoFillToken）**：桌面版广告保活已工作；web 版广告协议涉及展示确认闭环，风险高于收益，需独立验证周期；记入 backlog。
-- **视频上传**：上游抓包零样本，不对外宣称支持。
+## J6 真实 E2E 证据（2026-09-11）
 
-## Phase G 交付存档（已完成）
+| 场景 | 结果 |
+|------|------|
+| `--login-window` 启动 | 真实窗口弹出，WebView2 Runtime 151.x 真实渲染 freebuff.com |
+| 用户关闭窗口（未登录） | stderr 输出"窗口已关闭但未完成登录（可重试，或改用扩展/手动导入）"，report(1) 真实执行 |
+| 60s 超时（未登录） | timeout 124，符合超时语义 |
+| 网关共存 | 登录窗口全程网关 healthz 200，tokens.json 未被误改 |
+| 完整成功路径（登录 GitHub → 自动入库） | **待用户配合一次人工登录**（无浏览器自动化环境；机制与 Electron 桌面版逐行对齐） |
 
-- v0.5.0：commit 822d735 + e050bc9 + e3fc84c，tag v0.5.0，Release 已发布。
-- 浏览器一键登录闭环 / 凭证详情与使用记录 / 接入信息显性化 / Web-Cookie 桥接 / 三轮独立审查修复全落地。
-- 验证基线：cargo test 213 全绿 · E2E 46/46 · 真实上游链路实测过（含真实凭证八项）。
+## 明确不做 / Backlog（沿用）
 
-## Phase H 交付存档（实施完毕，待 critic-h 放行后随 v0.6.0 发布）
+- 桥接错误检测点前移（StreamEncoder 旁路）→ v0.7.x
+- SSE 攒批提交（NewAPI-Gateway 模式）
+- web 版 agent-runs/stream、web 版广告链、视频上传
+- 密码学随机 Key、桌面版多账号轮询增强
 
-- `/v1/models` 鉴权（实测 401/200/401/200 四态）
-- config.json 原子写（tmp+rename，往返无字段丢失）
-- OsRng 密码学随机 API Key（sk-fb- + 38 字符）
-- 桥接流内嵌错误识别接入 errors::classify（单测 5 断言）
-- E2E 脚本 try/finally Key 恢复（退出后 config 自动清干净，实测）
+## Phase H/I 存档（v0.6.0 已发布，commit 1435a8f）
+
+- models 鉴权 / config 原子写 / OsRng Key（192 位熵）/ 桥接去误报 / E2E finally 恢复
+- Phase I 全功能真实 E2E 18/18（保活/模型列表/工具调用/多轮记忆/长 agent/Anthropic 流式）
+- 验证基线：213 单测全绿 · clippy 0 警告 · phase_g 46/46 + phase_i 18/18

@@ -20,6 +20,10 @@ pub mod errors;
 pub mod extension;
 pub mod import;
 pub mod logbus;
+pub mod login_window;
+mod login_window_stub;
+#[cfg(windows)]
+mod login_window_windows;
 pub mod mcp;
 pub mod memory;
 pub mod models;

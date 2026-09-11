@@ -1,6 +1,6 @@
 [package]
 name = "freebuff2api"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Freebuff 免费模型 OpenAI/Anthropic 兼容 API 网关（Rust 版）"
 authors = ["lza6"]
@@ -40,6 +40,11 @@ thiserror = "2"
 # 工具
 regex = "1"
 rand = "0.8"
+
+# 内嵌登录窗口（仅 Windows：WebView2；Linux/macOS 编译会失败故平台门控）
+[target.'cfg(windows)'.dependencies]
+wry = { version = "0.57.0", default-features = false }
+tao = "0.37.0"
 
 [dev-dependencies]
 tempfile = "3"

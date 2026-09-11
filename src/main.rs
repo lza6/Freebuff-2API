@@ -15,6 +15,13 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 登录窗口子进程模式：不初始化 tokio 重基础设施，直接进 WebView2 事件循环（结果走退出码）
+    if std::env::args().any(|a| a == "--login-window") {
+        let port = std::env::var("GATEWAY_PORT").ok().and_then(|p| p.parse().ok());
+        let code = freebuff2api::login_window::run_login_window(port);
+        std::process::exit(code);
+    }
+
     // 日志
     tracing_subscriber::fmt()
         .with_env_filter(

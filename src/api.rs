@@ -146,6 +146,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/account/refresh", post(handle_account_refresh))
         .route("/api/account/history", get(handle_account_history))
         .route("/api/guide", get(handle_guide))
+        .route("/api/login/embed", post(handle_login_embed))
+        .route("/api/login/result", get(handle_login_result))
         .route("/api/extension/bundle", get(handle_extension_bundle))
         .route("/api/config/api-key", post(handle_config_api_key))
         .route("/v1/web/chat", post(handle_web_chat))
@@ -1413,6 +1415,65 @@ async fn handle_guide(State(st): State<AppState>, headers: HeaderMap) -> Respons
 struct KeyQuery {
     #[serde(default)]
     key: Option<String>,
+}
+
+/// GET /api/login/result — 读内嵌登录窗口的失败结果文件（面板 openEmbedLogin 轮询用）。
+/// 无文件/已消费即返回 ok:false（面板继续等或引导降级）。
+async fn handle_login_result(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&headers, &st) {
+        return admin_denied();
+    }
+    let path = std::path::Path::new("data/login_window_result.json");
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            // 读取即消费（一次性结果）
+            let _ = std::fs::remove_file(path);
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .unwrap_or(serde_json::json!({ "ok": false, "message": "结果文件损坏" }));
+            Json(v).into_response()
+        }
+        Err(_) => Json(serde_json::json!({ "ok": false, "consumed": true })).into_response(),
+    }
+}
+
+/// POST /api/login/embed — 派生内嵌 WebView2 登录窗口子进程（非阻塞）。
+///
+/// 浏览器版「一键登录」的首选路径：窗口里完成 GitHub 登录后，
+/// 子进程通过 WebView2 CookieManager 抓取含 HttpOnly 的全部 Cookie 并自动 POST
+/// `/api/tokens/import` 入库，然后窗口自关。面板轮询 `/api/tokens` 感知凭证增加。
+///
+/// 平台支持：Windows（WebView2 Runtime）；不支持时返回 ok:false + 原因，前端降级到扩展/剪贴板/手动。
+async fn handle_login_embed(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> Response {
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
+    }
+    // 解析监听端口（面板与本机网关同端口）
+    let port = st
+        .cfg
+        .listen_addr
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse::<u16>().ok())
+        .unwrap_or(47821);
+    let spawned = crate::login_window::spawn_login_window(port);
+    if spawned {
+        st.logs.emit("info", "login", None, "内嵌 WebView2 登录窗口已弹出（等待用户完成 GitHub 登录）");
+        Json(serde_json::json!({
+            "ok": true,
+            "message": "登录窗口已弹出，完成 GitHub 登录后凭证将自动入库",
+        }))
+        .into_response()
+    } else {
+        // 两种失败：① 登录窗口已在运行（防重入拒绝）② 平台不支持 WebView2 / spawn 失败。
+        // 文案不预设原因，引导用户看当前状态并给出替代路径。
+        (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "message": "登录窗口未能启动——可能已有一个登录窗口在运行（请查看任务栏），或当前平台不支持 WebView2。可改用剪贴板/手动导入。",
+            })),
+        )
+            .into_response()
+    }
 }
 
 /// GET /api/extension/bundle — 下载浏览器一键登录扩展（zip）

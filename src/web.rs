@@ -74,6 +74,9 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
 .doctor-item { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; align-items:flex-start; }
 .doctor-item .st { min-width:56px; }
 .tok { color:var(--ok); } .twarn { color:var(--warn); } .terr { color:var(--err); }
+#login-wizard { scroll-margin-top:70px; }
+@keyframes wizardFlash { 0%,100% { box-shadow:0 0 0 0 rgba(47,129,247,0); } 50% { box-shadow:0 0 0 4px rgba(47,129,247,.5); } }
+.wizard-flash { animation:wizardFlash .8s ease-in-out 2; }
 </style>
 </head>
 <body>
@@ -162,31 +165,45 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
 
       <div id="login-wizard" style="display:none;border:1px solid var(--accent);border-radius:8px;padding:14px;margin-bottom:12px;background:linear-gradient(135deg,#132a4a,#161b22)">
         <div class="row" style="margin-bottom:8px"><b>浏览器版一键登录</b><span style="flex:1"></span><button class="ghost sm" onclick="document.getElementById('login-wizard').style.display='none'">收起</button></div>
+        <div id="wizard-embed" style="font-size:13px;margin-bottom:10px;padding:8px;background:#0d1117;border-radius:6px">
+          <b>方案 A（最推荐 · 零安装零复制）：内嵌登录窗口</b> <span class="badge ok">登录完即完事</span>
+          <div style="margin:6px 0;color:var(--muted);line-height:1.9">点下面的按钮会弹出一个内置浏览器窗口（系统自带的 WebView2 组件）→ 在窗口里正常完成 GitHub 登录 → 网关<b>自动</b>抓取凭证入库并关闭窗口。全程无需装扩展、无需复制任何东西。</div>
+          <button onclick="openEmbedLogin()">🪟 弹出内嵌登录窗口</button>
+          <span id="embed-status" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+        </div>
+        <div id="wizard-clip" style="font-size:13px;margin-bottom:10px;padding:8px;background:#0d1117;border-radius:6px">
+          <b>方案 B（推荐 · 无需安装）：剪贴板自动检测</b> <span class="badge ok">约 30 秒</span>
+          <div style="margin:6px 0;color:var(--muted);line-height:1.9">去 freebuff.com 登录 → 按 <b>F12</b> → <b>Network</b> → 点任意请求 → 在 <b>Headers</b> 里找到 <code>Cookie:</code> 开头那一行并整行复制（Ctrl+C）→ 回来点下面这个按钮，剩下的自动完成。</div>
+          <button onclick="importFromClipboard()">📋 自动检测剪贴板</button>
+          <span id="clip-status" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+        </div>
         <div id="wizard-ext" style="font-size:13px;margin-bottom:10px;padding:8px;background:#0d1117;border-radius:6px">
-          <b>方案 A（推荐 · 全自动）：Chrome / Edge 扩展</b>
+          <b>方案 C（全自动 · 装一次以后都不用管）：Chrome / Edge 扩展</b> <span class="badge dim">首次约 2 分钟</span>
           <ol style="margin:6px 0 0 20px;color:var(--muted);line-height:1.9">
             <li>点上方「⬇ 下载扩展」得到 zip → 解压到任意目录（也可直接用项目里的 <code>browser-extension/</code> 目录）</li>
             <li>打开 <code>chrome://extensions</code>（Edge 为 <code>edge://extensions</code>）→ 打开「开发者模式」→「加载已解压的扩展程序」→ 选中刚解压的目录</li>
-            <li>回到本页点「重新检测」→ 状态变成 <span class="badge ok">已就绪</span> 后，再点「一键登录」即可<b>全自动</b>：自动打开 freebuff.com → 你完成 GitHub 登录 → 凭证自动入库</li>
+            <li>回到本页点「重新检测」→ 状态变成 <span class="badge ok">已就绪</span> 后，再点「一键登录」即可<b>全自动</b>：自动打开 freebuff.com → 你完成 GitHub 登录 → 凭证自动入库（含 HttpOnly Cookie，网页 JS 读不到，只有扩展能读）</li>
           </ol>
         </div>
-        <b style="font-size:13px">方案 B（30 秒手动）：3 步复制</b>
+        <b style="font-size:13px">手动粘贴（兜底）：<span style="color:var(--muted);font-weight:400">支持 Cookie 串 / cURL / HAR</span></b> <span class="badge dim">约 1 分钟</span>
         <ol style="margin:6px 0 10px 20px;font-size:13px;color:var(--muted);line-height:2">
           <li><button class="ghost sm" onclick="window.open('https://freebuff.com/','_blank','noopener')">① 打开 freebuff.com 并登录</button>（GitHub 登录即可）</li>
           <li>按 <b>F12</b> → <b>Network</b> → 刷新 → 点任意请求 → <b>Headers</b> 里找 <code>Cookie:</code> 整行复制（或 Application → Cookies 里复制 <code>__Secure-next-auth.session-token</code> 的值）</li>
-          <li>回到本页面粘贴到下方输入框 → 点「导入」→ 回到顶部点「刷新」</li>
+          <li>回到本页面粘贴到下方输入框 → 点「导入」（导入后会自动验证凭证是否有效）</li>
         </ol>
-        <div style="font-size:12px;color:var(--muted)">💡 为什么网页不能全自动？上游登录 Cookie 标记为 HttpOnly（浏览器禁止网页脚本读取）——扩展可以合法读取；桌面版由 Electron 主进程读取，因此桌面版是托盘一键全自动。</div>
+        <div style="font-size:12px;color:var(--muted)">💡 为什么网页不能全自动？上游登录 Cookie 标记为 HttpOnly（浏览器禁止网页脚本读取）——方案 B 的"复制"动作由你亲手完成（Ctrl+C 什么都能复制，HttpOnly 也拦不住剪贴板），网页脚本只负责读剪贴板和导入；扩展可以合法直接读 Cookie；桌面版由 Electron 主进程读取，因此桌面版是托盘一键全自动。</div>
       </div>
 
       <textarea id="import-text" placeholder="粘贴以下任意一种：
 1) 浏览器 Cookie 串（含 __Secure-next-auth.session-token=...）
 2) 从 DevTools 复制的 cURL (bash) 命令
-3) HAR 导出文件的 JSON 内容"></textarea>
+3) HAR 导出文件的 JSON 内容
+提示：也可以在 DevTools 里复制 Cookie 整行后，用向导里的「📋 自动检测剪贴板」一步完成"></textarea>
       <div class="row" style="margin-top:10px">
         <button onclick="doImport()">导入</button>
         <span id="import-result" style="font-size:13px;color:var(--muted)"></span>
       </div>
+      <div id="import-verify" style="display:none;margin-top:10px;font-size:13px"></div>
       <details style="margin-top:12px"><summary>怎么获取 Cookie？（点击展开详细图文说明）</summary>
         <ol style="margin:10px 0 0 20px;font-size:13px;color:var(--muted);line-height:1.9">
           <li>浏览器登录 freebuff.com</li>
@@ -677,7 +694,56 @@ function downloadExtension() {
 }
 
 // ---------- 账号 / 导入 ----------
+// ---------- 内嵌 WebView2 登录窗口（网关派生 --login-window 子进程） ----------
+/**
+ * 弹出内嵌登录窗口：后端 spawn `当前exe --login-window`（独立进程，tao+WebView2 事件循环），
+ * 用户在窗口里完成 GitHub 登录后由后端自动抓 Cookie（含 HttpOnly）并入库。
+ * 结果通过面板轮询 /api/tokens 感知（凭证数量增加即成功）。
+ */
+async function openEmbedLogin() {
+  const st = $('embed-status');
+  if (st) st.textContent = '正在弹出窗口…';
+  try {
+    const r = await api('/api/login/embed', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    if (!r.ok) {
+      if (st) st.innerHTML = '<span class="terr">' + esc(r.message || '当前环境不支持') + '</span>';
+      toast('内嵌窗口不可用：' + (r.message || '请改用方案 B/C'), 8000);
+      return;
+    }
+    toast('内嵌登录窗口已弹出 —— 在窗口里完成 GitHub 登录即可自动入库', 8000);
+    if (st) st.innerHTML = '<span class="tok">窗口已弹出，等待登录…</span>';
+    const before = await tokenCount();
+    // 双通道感知：凭证数量增加（成功）或结果文件报告失败（子进程退出码非 0）
+    const deadline = Date.now() + 600000;
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 3000));
+      const now = await tokenCount();
+      if (before >= 0 && now > before) {
+        toast('✅ 内嵌窗口登录成功，凭证已自动入库', 6000);
+        if (st) st.innerHTML = '<span class="tok">✅ 已入库</span>';
+        refreshTokens(); refreshAccountOverview(); loadHistory();
+        return;
+      }
+      // 失败结果文件（子进程异常退出时后端落盘）
+      try {
+        const fr = await api('/api/login/result');
+        if (fr && fr.ok === false && fr.message) {
+          if (st) st.innerHTML = '<span class="terr">' + esc(fr.message) + '</span>';
+          toast('内嵌登录窗口退出：' + fr.message, 9000);
+          return;
+        }
+      } catch (e2) { /* 结果文件接口失败不阻塞主轮询 */ }
+    }
+    if (st) st.innerHTML = '<span class="twarn">等待超时（10 分钟）</span>';
+    toast('等待登录超时 —— 请重试或改用方案 B/C', 8000);
+  } catch (e) {
+    if (st) st.innerHTML = '<span class="terr">' + esc(e.message) + '</span>';
+    toast('弹出失败：' + e.message + ' —— 请改用方案 B/C', 8000);
+  }
+}
+
 async function oneClickLogin() {
+  // [主控接线] 内嵌窗口分派将插入此处（内嵌 WebView2 登录窗口优先，由主控实现）
   // 路径 1：桌面版 Electron（主进程可直接读 HttpOnly Cookie）
   if (window.freebuffDesktop && window.freebuffDesktop.openLogin) {
     window.freebuffDesktop.openLogin();
@@ -689,10 +755,74 @@ async function oneClickLogin() {
     await oneClickViaExtension();
     return;
   }
-  // 路径 3：降级为手动向导
-  $('login-wizard').style.display = '';
+  // 路径 3：降级为手动向导（高亮"剪贴板自动检测"——步骤最少的手动路径）
+  const wiz = $('login-wizard');
+  wiz.style.display = '';
+  wiz.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const clipCard = $('wizard-clip');
+  if (clipCard) {
+    clipCard.classList.remove('wizard-flash');
+    // 强制 reflow 让动画可以重复触发
+    void clipCard.offsetWidth;
+    clipCard.classList.add('wizard-flash');
+  }
   window.open('https://freebuff.com/', '_blank', 'noopener');
-  toast('未检测到浏览器扩展 —— 已打开 freebuff.com，请按向导完成（装扩展可全自动）', 7000);
+  toast('未检测到浏览器扩展 —— 已打开 freebuff.com，推荐用向导「方案 B：自动检测剪贴板」（复制回来点一下即可）', 9000);
+}
+/**
+ * 剪贴板自动导入：读取剪贴板文本 → 填入输入框 → 自动触发导入。
+ * 剪贴板 API 需要安全上下文且部分浏览器要求页面先获得焦点，失败时明确提示改用手动粘贴（降级路径始终存在）。
+ */
+async function importFromClipboard() {
+  const st = $('clip-status');
+  if (st) st.textContent = '正在读取剪贴板…（若浏览器弹窗询问权限，请允许）';
+  let text = '';
+  try {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+      throw new Error('当前浏览器不支持读取剪贴板（或页面不在 HTTPS/localhost 安全上下文）');
+    }
+    text = (await navigator.clipboard.readText()).trim();
+  } catch (e) {
+    if (st) st.innerHTML = `<span class="twarn">读取剪贴板失败：${esc(e.message)}</span> —— 请改用下方输入框手动粘贴（Ctrl+V），效果完全一样`;
+    toast('无法读取剪贴板 —— 请手动粘贴到输入框后点「导入」', 7000);
+    $('import-text').focus();
+    return;
+  }
+  if (!text) {
+    if (st) st.innerHTML = '<span class="twarn">剪贴板是空的 —— 请先去 freebuff.com 的 DevTools 里复制 Cookie 整行（Ctrl+C）</span>';
+    return;
+  }
+  if (st) st.textContent = '已从剪贴板取到内容，开始自动导入…';
+  $('import-text').value = text;
+  toast('已从剪贴板读取内容，正在自动导入…', 4000);
+  await doImport('clipboard');
+}
+/**
+ * 导入成功后的即贴即验：找出最新入库的凭证 → 调上游检查端点 → 把结果直接显示在向导里。
+ * id 匹配不到时静默跳过（列表刷新已由 doImport 完成，不阻塞主流程）。
+ */
+async function verifyNewCredential() {
+  const box = $('import-verify');
+  if (!box) return;
+  box.style.display = '';
+  box.innerHTML = '<span style="color:var(--muted)">⏳ 正在向上游验证刚导入的凭证…（需要几秒）</span>';
+  try {
+    const r = await api('/api/tokens');
+    const list = r.tokens || [];
+    // 列表接口不保证排序，比较入库时间取最新一条
+    const newest = list.slice().sort((a, b) => String(b.added_at || '').localeCompare(String(a.added_at || '')))[0];
+    if (!newest || !newest.id) { box.style.display = 'none'; return; }
+    const c = await api('/api/tokens/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: newest.id }) });
+    if (c.ok && c.valid) {
+      const m = c.meta || {};
+      const who = m.email || m.name || '账号信息已更新';
+      box.innerHTML = `<span class="tok">✅ 已验证：${esc(who)}</span> <span style="color:var(--muted)">（${esc([m.name, m.email].filter(Boolean).join(' · ') || '凭证有效')}）</span>`;
+    } else {
+      box.innerHTML = `<span class="twarn">⚠️ Cookie 已录入但上游校验失败（可能未登录或已过期），请重新复制</span>${c.message ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">上游说：${esc(c.message)}</div>` : ''}`;
+    }
+  } catch (e) {
+    box.innerHTML = `<span class="twarn">⚠️ 自动验证失败：${esc(e.message)}</span> <span style="color:var(--muted)">—— 凭证已入库，可稍后在凭证列表点「检查」手动验证</span>`;
+  }
 }
 async function oneClickViaExtension() {
   toast('正在通知扩展…', 3000);
@@ -742,20 +872,24 @@ async function pollForNewCredential(before, timeoutMs) {
   }
   toast('等待登录超时 —— 完成登录后点扩展图标，或回到本页点「刷新」', 8000);
 }
-async function doImport() {
+async function doImport(source) {
   const text = $('import-text').value.trim();
   if (!text) { toast('请先粘贴内容'); return; }
   $('import-result').textContent = '导入中…';
+  const verifyBox = $('import-verify');
+  if (verifyBox) { verifyBox.style.display = 'none'; verifyBox.innerHTML = ''; }
   try {
     const r = await api('/api/tokens/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cookie: text }) });
     if (r.added > 0) {
-      $('import-result').innerHTML = `<span class="tok">✅ 成功导入 ${r.added} 个凭证</span>`;
+      $('import-result').innerHTML = `<span class="tok">✅ 成功导入 ${r.added} 个凭证${source === 'clipboard' ? '（来源：剪贴板）' : ''}</span>`;
       $('import-text').value = '';
       $('login-wizard').style.display = 'none';
-      toast('导入成功，正在拉取账号信息…');
+      toast(source === 'clipboard' ? '✅ 剪贴板内容导入成功，正在验证凭证…' : '导入成功，正在拉取账号信息…');
       refreshTokens();
       refreshAccountOverview();
       loadHistory();
+      // 即贴即验：导入成功后立刻向上游验证新凭证并把结果显示在向导附近
+      verifyNewCredential();
     } else {
       $('import-result').innerHTML = `<span class="twarn">该凭证已存在（同值自动去重，未重复入库）</span>`;
       refreshTokens();

@@ -784,9 +784,14 @@ async fn web_bridge_openai(
             record_thread(&threads_path, &tid);
         }
         let (pt, ct) = extract_usage(&tail).unwrap_or((0, 0));
-        // 桥接流内嵌错误识别：上游 200 内嵌 error envelope（"Unauthorized"/"error"）按既有
-        // 错误规则表分类，对齐 Phase E 的桌面协议修复——不再只认字面 "Unauthorized"。
-        let bridge_kind = detect_bridge_error(&tail);
+        // 桥接流内嵌错误识别（Critic-J P2-1 闭环）：优先用 StreamEncoder 旁路槽
+        // （能看到上游原始 error envelope），tail 扫描 detect_bridge_error 作兜底。
+        let bypass_error = client_track.last_upstream_error();
+        let bridge_kind = bypass_error
+            .as_deref()
+            .map(|e| crate::errors::classify(200, e).as_str().to_string())
+            .or_else(|| detect_bridge_error(&tail).map(|s| s.to_string()));
+        let bridge_kind: Option<&str> = bridge_kind.as_deref();
         let status: i64 = if bridge_kind.is_some() { 502 } else { 200 };
         usage_db
             .record_ex(

@@ -71,6 +71,9 @@ pub struct WebClient {
     /// 最近一次流中上游 meta/title 事件给出的 threadId（多轮续聊用）。
     /// 并发多路流共用同一 WebClient 时以最后写入者为准。
     last_thread_id: Arc<Mutex<Option<String>>>,
+    /// 上游 200 内嵌错误旁路（本路流最近一次检测到的 error envelope）。
+    /// encode_block 在反序列化前探测——桥接层 tail 只含转换后 chunk，这是唯一可见点。
+    last_upstream_error: Arc<Mutex<Option<String>>>,
 }
 
 /// chat/stream SSE 事件（web 版 11 种类型）
@@ -282,7 +285,14 @@ impl WebClient {
             .cookie_store(true)
             .build()?;
         let instance_id = instance_id_for_cookie(&cookie);
-        Ok(Self { http, cookie, model, instance_id, last_thread_id: Arc::new(Mutex::new(None)) })
+        Ok(Self {
+            http,
+            cookie,
+            model,
+            instance_id,
+            last_thread_id: Arc::new(Mutex::new(None)),
+            last_upstream_error: Arc::new(Mutex::new(None)),
+        })
     }
 
     /// 最近一次 web 流中上游 meta/title 事件给出的 threadId。
@@ -294,6 +304,17 @@ impl WebClient {
     /// 内部：threadId 记录槽（克隆 Arc 供流闭包持有，避免借用 self）
     fn thread_slot(&self) -> Arc<Mutex<Option<String>>> {
         self.last_thread_id.clone()
+    }
+
+    /// 内部：上游内嵌错误旁路槽（同 thread_slot 模式）
+    fn error_slot(&self) -> Arc<Mutex<Option<String>>> {
+        self.last_upstream_error.clone()
+    }
+
+    /// 本 WebClient 最近一路流中检测到的上游内嵌错误（200 OK + error envelope）。
+    /// 桥接层在流结束时读取，用于遥测/日志如实记录失败原因。
+    pub fn last_upstream_error(&self) -> Option<String> {
+        self.last_upstream_error.lock().ok().and_then(|g| g.clone())
     }
 
     fn headers(&self, json: bool) -> HeaderMap {
@@ -344,8 +365,9 @@ impl WebClient {
 
         let byte_stream = resp.bytes_stream();
         let sse_buf: Vec<u8> = Vec::new();
-        // 每路流独立的转换器：tool_calls index 分配 + threadId 记录
-        let encoder = StreamEncoder::new(self.thread_slot());
+        // 每路流独立的转换器：tool_calls index 分配 + threadId 记录 + 上游内嵌错误旁路
+        let error_slot = self.error_slot();
+        let encoder = StreamEncoder::new(self.thread_slot(), error_slot);
         let stream = futures::stream::unfold((byte_stream, sse_buf, false, encoder), |(mut stream, mut buf, finished, mut enc)| async move {
             if finished { return None; }
             loop {
@@ -636,11 +658,22 @@ struct StreamEncoder {
     next_tool_index: usize,
     has_tool_calls: bool,
     thread_id: Arc<Mutex<Option<String>>>,
+    /// 上游 200 内嵌错误旁路：encode_block 反序列化失败/未知事件的行里若含
+    /// error envelope，在此记录（Critic-J P2-1：检测点前移到能看到上游原始事件的层面）
+    upstream_error: Option<String>,
+    /// 错误旁路槽（与 WebClient 共享，桥接层流结束后可读）
+    _error_slot: Arc<Mutex<Option<String>>>,
 }
 
 impl StreamEncoder {
-    fn new(thread_id: Arc<Mutex<Option<String>>>) -> Self {
-        Self { tool_index: HashMap::new(), next_tool_index: 0, has_tool_calls: false, thread_id }
+    fn new(thread_id: Arc<Mutex<Option<String>>>, error_slot: Arc<Mutex<Option<String>>>) -> Self {
+        Self { tool_index: HashMap::new(), next_tool_index: 0, has_tool_calls: false, thread_id, upstream_error: None, _error_slot: error_slot }
+    }
+
+    /// 读取上游内嵌错误（若有）。取后不清——同一错误重复读取得到同一结果。
+    #[cfg(test)]
+    pub fn take_upstream_error(&self) -> Option<String> {
+        self.upstream_error.clone()
     }
 
     /// 分配（或复用）toolCallId 对应的 OpenAI tool_calls index。
@@ -683,6 +716,19 @@ impl StreamEncoder {
             let Some(json) = line.strip_prefix("data:") else { continue };
             let json = json.trim();
             if json.is_empty() || json == "[DONE]" { continue; }
+            // 检测点前移（Critic-J P2-1）：先探 error envelope（含反序列化会失败的未知事件），
+            // 桥接层的 tail 只含转换后 chunk，看不到这里——这是上游内嵌错误的唯一可见点
+            if self.upstream_error.is_none() {
+                if let Ok(raw) = serde_json::from_str::<serde_json::Value>(json) {
+                    if let Some(err) = raw.get("error") {
+                        let text = err.as_str().map(String::from).unwrap_or_else(|| err.to_string());
+                        self.upstream_error = Some(text.clone());
+                        if let Ok(mut slot) = self._error_slot.lock() {
+                            *slot = Some(text); // 旁路槽：桥接层流结束后可读
+                        }
+                    }
+                }
+            }
             let Ok(event) = serde_json::from_str::<ChatEvent>(json) else { continue };
             match event {
                 ChatEvent::Delta { text } => text_parts.push(text),
@@ -832,7 +878,7 @@ mod tests {
 
     #[test]
     fn agent_delta_maps_to_content_delta() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let (out, done) = enc.encode_block("data: {\"type\":\"agent_delta\",\"agentId\":\"a1\",\"text\":\"工具结果\"}\n\n");
         assert!(!done);
         let cs = chunks(&out);
@@ -843,7 +889,7 @@ mod tests {
 
     #[test]
     fn agent_delta_interleaves_with_delta_in_order() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = concat!(
             "data: {\"type\":\"delta\",\"text\":\"A\"}\n\n",
             "data: {\"type\":\"agent_delta\",\"agentId\":\"a\",\"text\":\"B\"}\n\n",
@@ -858,7 +904,7 @@ mod tests {
 
     #[test]
     fn parallel_agent_tools_get_incrementing_indexes() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let mut raw = String::new();
         for i in 0..5 {
             raw += &format!("data: {{\"type\":\"agent_tool\",\"agentId\":\"a\",\"toolCallId\":\"t{i}\",\"toolName\":\"web_search\",\"label\":\"l{i}\"}}\n\n");
@@ -876,7 +922,7 @@ mod tests {
 
     #[test]
     fn repeated_tool_call_id_reuses_index() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = concat!(
             "data: {\"type\":\"agent_tool\",\"toolCallId\":\"x\",\"toolName\":\"web_search\"}\n\n",
             "data: {\"type\":\"agent_tool_done\",\"toolCallId\":\"x\"}\n\n",
@@ -891,7 +937,7 @@ mod tests {
 
     #[test]
     fn missing_tool_call_id_yields_non_empty_unique_id() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = concat!(
             "data: {\"type\":\"agent_tool\",\"toolName\":\"web_search\"}\n\n",
             "data: {\"type\":\"agent_tool\",\"toolName\":\"read_url\"}\n\n",
@@ -907,7 +953,7 @@ mod tests {
 
     #[test]
     fn done_after_tool_call_finishes_with_tool_calls_reason() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = concat!(
             "data: {\"type\":\"agent_tool\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}\n\n",
             "data: {\"type\":\"done\"}\n\n",
@@ -922,7 +968,7 @@ mod tests {
 
     #[test]
     fn done_without_tools_finishes_with_stop_reason() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = concat!(
             "data: {\"type\":\"delta\",\"text\":\"hi\"}\n\n",
             "data: {\"type\":\"done\"}\n\n",
@@ -937,7 +983,7 @@ mod tests {
     #[test]
     fn upstream_eof_without_done_still_emits_terminal_chunk() {
         // 上游 EOF 无 done：调用方用 finish_chunk() 补发（chat_stream_raw 的 None 分支）
-        let enc = StreamEncoder::new(new_slot());
+        let enc = StreamEncoder::new(new_slot(), new_slot());
         let out = format!("{}data: [DONE]\n\n", enc.finish_chunk());
         assert!(out.ends_with("data: [DONE]\n\n"));
         assert_eq!(chunks(&out)[0]["choices"][0]["finish_reason"], "stop");
@@ -948,7 +994,7 @@ mod tests {
     #[test]
     fn meta_and_title_record_thread_id() {
         let slot = new_slot();
-        let mut enc = StreamEncoder::new(slot.clone());
+        let mut enc = StreamEncoder::new(slot.clone(), new_slot());
         enc.encode_block("data: {\"type\":\"meta\",\"threadId\":\"d8557501\",\"title\":\"用户原文\",\"model\":\"deepseek-v4-flash\",\"accessTier\":\"limited\"}\n\n");
         assert_eq!(slot.lock().unwrap().clone(), Some("d8557501".to_string()));
         // title 二次更新（同一 threadId）
@@ -963,7 +1009,7 @@ mod tests {
     fn web_client_exposes_last_thread_id() {
         let client = WebClient::new("__Secure-next-auth.session-token=x".into(), "glm-5.3-flash".into()).unwrap();
         assert_eq!(client.last_thread_id(), None);
-        let mut enc = StreamEncoder::new(client.thread_slot());
+        let mut enc = StreamEncoder::new(client.thread_slot(), new_slot());
         enc.encode_block("data: {\"type\":\"meta\",\"threadId\":\"th-1\",\"title\":\"t\"}\n\n");
         assert_eq!(client.last_thread_id().as_deref(), Some("th-1"));
     }
@@ -1027,7 +1073,7 @@ mod tests {
             "data: {\"type\":\"done\"}\n\n",
         );
         let slot = new_slot();
-        let mut enc = StreamEncoder::new(slot.clone());
+        let mut enc = StreamEncoder::new(slot.clone(), new_slot());
         let out = drive(&mut enc, raw.as_bytes());
 
         assert!(out.ends_with("data: [DONE]\n\n"));
@@ -1061,7 +1107,7 @@ mod tests {
 
     #[test]
     fn crlf_stream_is_split_correctly() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let raw = "data: {\"type\":\"delta\",\"text\":\"hi\"}\r\n\r\ndata: {\"type\":\"done\"}\r\n\r\n";
         let out = drive(&mut enc, raw.as_bytes());
         assert_eq!(chunks(&out).len(), 2);
@@ -1095,10 +1141,31 @@ mod tests {
         assert!(v.url.is_none() && v.description_storage_id.is_none());
     }
 
+    /// 上游 200 内嵌错误旁路（Critic-J P2-1 闭环）：error envelope 在 encode_block 中被捕获
+    #[test]
+    fn upstream_error_bypass_captured() {
+        let client = WebClient::new("__Secure-next-auth.session-token=x".into(), "glm-5.3-flash".into()).unwrap();
+        let mut enc = StreamEncoder::new(client.thread_slot(), client.error_slot());
+        // 反序列化会失败的纯 error envelope（无 type 字段）
+        let (out, _) = enc.encode_block("data: {\"error\":\"Unauthorized\"}
+
+");
+        assert!(out.is_empty(), "错误事件不应产生输出");
+        assert_eq!(client.last_upstream_error().as_deref(), Some("Unauthorized"), "旁路槽必须能读到（桥接层唯一可见点）");
+        // 已知事件变体携带额外 error 字段
+        let mut enc2 = StreamEncoder::new(new_slot(), new_slot());
+        enc2.encode_block("data: {\"type\":\"meta\",\"error\":\"rate limited\"}
+
+");
+        assert_eq!(client_cases(enc2), Some("rate limited".to_string()));
+    }
+
+    fn client_cases(enc: StreamEncoder) -> Option<String> { enc.take_upstream_error() }
+
     /// 未映射事件（button/unknown）不得产生任何输出、不得报错
     #[test]
     fn unknown_events_are_ignored() {
-        let mut enc = StreamEncoder::new(new_slot());
+        let mut enc = StreamEncoder::new(new_slot(), new_slot());
         let (out, done) = enc.encode_block("data: {\"type\":\"button\"}\n\ndata: {\"type\":\"brand_new_event\",\"x\":1}\n\n");
         assert!(out.is_empty());
         assert!(!done);

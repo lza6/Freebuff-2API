@@ -44,7 +44,7 @@
 ## 明确不做 / Backlog（沿用）
 
 - ~~桥接错误检测点前移~~ → ✅ v0.7.2 已完成（commit bb9f7b4）
-- SSE 攒批提交（NewAPI-Gateway 模式）
+- SSE 攒批提交（NewAPI-Gateway 模式）→ **评估后保留 backlog**：改动面 ~200 行触碰核心转发路径，上游 200 内嵌错误在桥接侧已由 v0.7.2 bypass 覆盖、桌面侧已能如实记录（Phase E），收益/风险比不支持本轮实施
 - web 版 agent-runs/stream、web 版广告链、视频上传
 - 密码学随机 Key、桌面版多账号轮询增强
 

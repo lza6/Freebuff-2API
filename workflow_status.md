@@ -45,7 +45,7 @@
 | G6c | **Web-Cookie 桥接**：/v1 双协议桥接 + thread 复用（省每日会话额度）+ Anthropic 事件流转换 | 主控 | — | `src/web_threads.rs`、`src/api.rs` | DONE |
 | G7 | 验证：212 单测全绿 + E2E 46 项全过 + 真实上游链路（账号全貌/桥接对话/续聊复用） | 主控 | G1-G6c | 证据 | DONE |
 | G8 | 独立 Critic 审查 + 修复 | Critic-1b/2b/3b | G7 | 报告 | DONE（三份 CONDITIONAL PASS，发现全修，复验全绿） |
-| G9 | 文档同步 + 提交 + 推送 + 发布 v0.5.0 | 主控 | G8 | release | PENDING |
+| G9 | 文档同步 + 提交 + 推送 + 发布 v0.5.0 | 主控 | G8 | release | DONE |
 
 ## G7 验证证据（2026-09-11 实测）
 
@@ -119,4 +119,6 @@
 
 ## Next Gate
 
-- G9：文档终核（CHANGELOG/README/API_GUIDE）→ git 提交 → 推送 → tag v0.5.0 → GitHub Release。
+- **Phase G 已完结**：commit `822d735` 已推送 `main`，tag `v0.5.0` 已推送，Release 已创建（https://github.com/lza6/Freebuff-2API/releases/tag/v0.5.0）。
+- 遗留（已记录、非阻塞）：/v1/models 鉴权（HEAD 既有）、config.json 原子写、web 版 agent-runs/stream 与 web 广告链（U4 P1-P2）、扩展真实浏览器全流程人工验证。
+- 密码学随机 API Key（当前 UUIDv4）、SSE 攒批提交（NewAPI-Gateway 模式）列入 v0.6.0 候选。

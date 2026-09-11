@@ -61,6 +61,7 @@ async function json(method, path, body, headers) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 (async () => {
+
   console.log(`\n=== Phase G E2E（http://${HOST}:${PORT}）===\n`);
 
   // ---------- 0. 服务可达 ----------
@@ -220,12 +221,22 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
 
   // ---------- 9. API Key 运行时管理（放最后，跑完恢复原状） ----------
+  // 快照当前 Key 配置：脚本异常退出时 finally 用它重置回已知 Key（原 Key 明文本就不可得，guide 只回掩码；此 generate 会使原 Key 失效并重置为已知值）
+  let snapshotKey = null;
+  let generatedKey = null;
+  try {
+    const g = await json('GET', '/api/guide');
+    const cnt = ((g.json || {}).api_keys || {}).count || 0;
+    if (cnt > 0) { const gen = await json('POST', '/api/config/api-key', { action: 'generate' }); snapshotKey = (gen.json || {}).key || null; }
+  } catch (e) { snapshotKey = null; }
+
   {
     const before = await json('GET', '/api/guide');
     const wasConfigured = !!(before.json && before.json.api_keys && before.json.api_keys.configured);
 
     const gen = await json('POST', '/api/config/api-key', { action: 'generate' });
     const newKey = (gen.json || {}).key;
+    generatedKey = newKey;
     ok('9.1 生成 API Key 成功并回显', gen.status === 200 && typeof newKey === 'string' && newKey.length >= 12, `${gen.status} ${gen.text.slice(0, 150)}`);
 
     // 不带 Key → 管理端点应拒绝
@@ -256,4 +267,17 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   console.log(results.join('\n'));
   console.log(`\n=== 结果：${passed} 通过 / ${failed} 失败 ===\n`);
   process.exit(failed > 0 ? 1 : 0);
-})().catch(e => { console.error('E2E 脚本异常:', e); process.exit(1); });
+})().catch(e => { console.error('E2E 脚本异常:', e); process.exitCode = 1; }).finally(async () => {
+  // 恢复网关 Key 状态：起始无 Key → clear；起始有 Key（不应发生）→ 恢复原值
+  try {
+    if (snapshotKey) {
+      await json('POST', '/api/config/api-key', { action: 'set', key: snapshotKey }, { authorization: 'Bearer ' + snapshotKey });
+      console.log('（恢复：网关原有 API Key 已重置回去）');
+    } else {
+      await json('POST', '/api/config/api-key', { action: 'clear' }, { authorization: 'Bearer ' + (generatedKey || '') });
+      console.log('（恢复：E2E 生成的临时 Key 已清除）');
+    }
+  } catch (e) { console.error('（警告：Key 状态恢复失败，请检查 /api/config/api-key）', e.message); }
+  // 兜底清理测试凭证
+  if (testCredId) { try { await json('POST', '/api/tokens/delete', { id: testCredId }); } catch (e) { /* 忽略 */ } }
+});

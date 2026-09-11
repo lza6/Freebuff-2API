@@ -630,6 +630,7 @@ function explain(r) {
   return '暂无解释数据。';
 }
 
+// ---------- 余额卡 ----------
 // ---------- 浏览器扩展桥（面板 ↔ 扩展 直连） ----------
 // 扩展的 bridge.js content script 会 postMessage 广播自己的 id；
 // 拿到 id 后本页就能用 chrome.runtime.sendMessage 直接指挥扩展读 Cookie（真正的一键登录）。

@@ -192,7 +192,18 @@ async fn handle_healthz(State(st): State<AppState>, headers: HeaderMap) -> Respo
     Json(json).into_response()
 }
 
-async fn handle_v1_models(State(st): State<AppState>) -> impl IntoResponse {
+async fn handle_v1_models(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    // 与数据面同一套防线：配置 api_keys 时必须校验（模型清单不对未授权方公开）；
+    // 未配置时仅本机直连。
+    let keys = api_keys_of(&st);
+    let authorized_ok = if keys.is_empty() {
+        is_loopback_request(&headers)
+    } else {
+        authorized(&headers, &keys)
+    };
+    if !authorized_ok {
+        return admin_denied().into_response();
+    }
     let models = st.registry.models().await;
     let data: Vec<serde_json::Value> = models
         .iter()
@@ -207,7 +218,7 @@ async fn handle_v1_models(State(st): State<AppState>) -> impl IntoResponse {
             })
         })
         .collect();
-    Json(serde_json::json!({ "object": "list", "data": data }))
+    Json(serde_json::json!({ "object": "list", "data": data })).into_response()
 }
 
 // ---------- 用量 API ----------
@@ -771,8 +782,10 @@ async fn web_bridge_openai(
             record_thread(&threads_path, &tid);
         }
         let (pt, ct) = extract_usage(&tail).unwrap_or((0, 0));
-        let unauthorized = tail.contains("Unauthorized");
-        let status: i64 = if unauthorized { 502 } else { 200 };
+        // 桥接流内嵌错误识别：上游 200 内嵌 error envelope（"Unauthorized"/"error"）按既有
+        // 错误规则表分类，对齐 Phase E 的桌面协议修复——不再只认字面 "Unauthorized"。
+        let bridge_kind = detect_bridge_error(&tail);
+        let status: i64 = if bridge_kind.is_some() { 502 } else { 200 };
         usage_db
             .record_ex(
                 "web-cookie",
@@ -781,8 +794,8 @@ async fn web_bridge_openai(
                 ct as i64,
                 total_ms as i64,
                 status,
-                if unauthorized { "upstream_5xx" } else { "" },
-                if unauthorized { "上游返回未授权（凭证可能失效）" } else { "" },
+                bridge_kind.unwrap_or(""),
+                bridge_kind.map(|k| format!("上游桥接流内嵌错误（{k}）：凭证可能失效或额度耗尽")).as_deref().unwrap_or(""),
                 &req_id_track,
             )
             .ok();
@@ -798,8 +811,8 @@ async fn web_bridge_openai(
             prompt_tokens: pt,
             completion_tokens: ct,
             stream: true,
-            error_kind: (status != 200).then(|| "upstream_5xx".to_string()),
-            error_excerpt: (status != 200).then(|| tail_keep(&tail, 300)),
+            error_kind: bridge_kind.map(|k| k.to_string()),
+            error_excerpt: bridge_kind.map(|_| tail_keep(&tail, 300)),
             route_reason: Some(reason),
             api_key: None,
             client_ip: None,
@@ -823,6 +836,29 @@ async fn web_bridge_openai(
 /// 桥接路径完成日志（后台任务收尾时调用，避免闭包捕获整个 AppState）
 fn st_logs_done(telem: &TelemetryWriter, req_id: &str, model: &str, bytes: u64, total_ms: u128) {
     telem.event(req_id, "done", &format!("web bridge {model}：{bytes}B / {total_ms}ms"));
+}
+
+/// 识别桥接 SSE 流中的上游内嵌错误（200 内嵌 error envelope）。
+/// 返回 Some(kind) 表示流里出现了错误（对齐 `errors::classify` 的 kind 命名）。
+fn detect_bridge_error(tail: &str) -> Option<&'static str> {
+    // 快路径：无引号 error 字样直接放行（避免对每行做 JSON 解析）
+    if !tail.contains("\"error\"") {
+        return None;
+    }
+    for line in tail.lines() {
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        let data = data.trim();
+        if data == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        if let Some(err) = v.get("error") {
+            let body_text = err.as_str().map(String::from).unwrap_or_else(|| err.to_string());
+            let kind = crate::errors::classify(200, &body_text);
+            return Some(kind.as_str());
+        }
+    }
+    None
 }
 
 /// 桥接响应的 OpenAI→Claude 形状适配（/v1/messages 桥接路径用）。
@@ -1419,7 +1455,15 @@ async fn handle_config_api_key(State(st): State<AppState>, headers: HeaderMap, b
 
     let new_keys: Vec<String> = match action {
         "generate" => {
-            let k = format!("sk-fb-{}", uuid::Uuid::new_v4().simple());
+            // 密码学随机（OsRng 32 字节 → 32 字符 base64url 字符集映射，192 位有效熵），
+            // 不可预测/不可枚举；UUIDv4 只有 122 位随机且格式可识别
+            use rand::RngCore;
+            use rand::rngs::OsRng;
+            const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let mut raw = [0u8; 32];
+            OsRng.fill_bytes(&mut raw);
+            let token: String = raw.iter().map(|b| B64URL[(b & 63) as usize] as char).collect();
+            let k = format!("sk-fb-{token}");
             vec![k]
         }
         "set" => {
@@ -1452,7 +1496,16 @@ async fn handle_config_api_key(State(st): State<AppState>, headers: HeaderMap, b
         root["api_keys"] = serde_json::json!(new_keys);
         let write_res = serde_json::to_string_pretty(&root)
             .map_err(|e| e.to_string())
-            .and_then(|s| std::fs::write(p, s).map_err(|e| e.to_string()));
+            .and_then(|s| {
+                // 原子写：临时文件 + rename，防写入中途崩溃损坏 config.json
+                let tmp = format!("{p}.tmp");
+                std::fs::write(&tmp, s.clone()).map_err(|e| e.to_string())?;
+                #[cfg(windows)]
+                if std::path::Path::new(p).exists() {
+                    let _ = std::fs::remove_file(p);
+                }
+                std::fs::rename(&tmp, p).map_err(|e| e.to_string())
+            });
         match write_res {
             Ok(()) => tracing::info!("api_keys 已写回 {p}"),
             Err(e) => tracing::warn!("api_keys 写回 {p} 失败: {e}（仅内存生效）"),
@@ -3962,5 +4015,22 @@ mod tests {
         assert!(credential_usable(Some(&real), None));
         let quota = serde_json::json!({"accessTier": "limited"});
         assert!(credential_usable(None, Some(&quota)));
+    }
+
+    #[test]
+    fn bridge_error_detection() {
+        // 正常流：无 error 字样 → None
+        assert_eq!(detect_bridge_error("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"), None);
+        // 上游 200 内嵌 error envelope → 分类为 auth 类（对齐 errors::classify）
+        let sse = "data: {\"error\":{\"message\":\"Unauthorized\",\"type\":\"auth\"}}\n\n";
+        assert_eq!(detect_bridge_error(sse), Some("auth_expired"));
+        // error 是字符串形式同样识别
+        let sse2 = "data: {\"error\":\"Unauthorized\"}\n\n";
+        assert!(detect_bridge_error(sse2).is_some(), "字符串 error 也必须识别");
+        // error 字样出现在正文里（非 envelope）→ 不误报
+        let false_pos = "data: {\"choices\":[{\"delta\":{\"content\":\"他说 error 这个词\"}}]}\n\n";
+        assert_eq!(detect_bridge_error(false_pos), None);
+        // 空流
+        assert_eq!(detect_bridge_error(""), None);
     }
 }

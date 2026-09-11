@@ -37,3 +37,6 @@ config2.json
 
 # 本机 cargo 代理配置（含本地端口，不入库）
 .cargo/
+
+# E2E 运行时生成的隔离配置（可能临时含生成的 api key，绝不入库）
+tests/e2e_phase_g.config.json

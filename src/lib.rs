@@ -12,10 +12,12 @@
 //! - `ads`      广告换 token 保活
 //! - `web`      内嵌控制面板静态资源
 
+pub mod account_meta;
 pub mod ads;
 pub mod api;
 pub mod config;
 pub mod errors;
+pub mod extension;
 pub mod import;
 pub mod logbus;
 pub mod mcp;
@@ -33,5 +35,6 @@ pub mod upstream;
 pub mod usage;
 pub mod web;
 pub mod web_protocol;
+pub mod web_threads;
 
 pub use config::Config;

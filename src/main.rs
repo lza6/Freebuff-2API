@@ -24,11 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    let config_path = std::env::args().nth(1).filter(|a| a != "--config").or_else(|| {
-        std::env::args()
-            .position(|a| a == "--config")
-            .and_then(|i| std::env::args().nth(i + 1))
-    });
+    let config_path = freebuff2api::config::resolve_config_path();
     let cfg = Config::load(config_path.as_deref())?;
     let listen_addr = cfg.listen_addr.clone();
     tracing::info!("Freebuff2API v{} 启动", env!("CARGO_PKG_VERSION"));
@@ -81,6 +77,23 @@ async fn main() -> anyhow::Result<()> {
     // 内置提示词/技能
     let prompts = Arc::new(freebuff2api::prompts::PromptManager::new());
 
+    // 凭证账号信息缓存 + 账号使用记录（面板凭证列表与历史查询）
+    let meta = Arc::new(freebuff2api::account_meta::AccountMetaStore::new(
+        PathBuf::from(&cfg.cred_meta_path),
+        PathBuf::from(&cfg.account_history_path),
+    ));
+    tracing::info!("凭证信息缓存: {} · 使用记录: {}", cfg.cred_meta_path, cfg.account_history_path);
+
+    // 运行时 API Key（面板可一键生成并热生效，无需重启）
+    let api_keys = Arc::new(std::sync::RwLock::new(cfg.api_keys.clone()));
+    if cfg.api_keys.is_empty() {
+        tracing::info!("未配置 api_keys：仅本机可访问（面板可在「接入指南」一键生成）");
+    }
+
+    // web 协议桥接（OpenAI/Anthropic 客户端 → 上游 thread 复用，省每日会话额度）
+    let web_threads = Arc::new(freebuff2api::web_threads::WebThreadMap::new(PathBuf::from(&cfg.web_threads_path)));
+    tracing::info!("web 桥接会话绑定: {}", cfg.web_threads_path);
+
     // 启动各账号后台保活
     {
         let accounts = pool.accounts.lock().await;
@@ -104,8 +117,18 @@ async fn main() -> anyhow::Result<()> {
         skills,
         ads,
         prompts,
+        meta,
+        api_keys,
+        web_threads,
         started: std::time::Instant::now(),
     };
+
+    // 上游会话自动清理（用户批注：反代要自己清理，别给上游留压力被查出来）
+    if state.cfg.thread_cleanup_interval_sec > 0 {
+        tokio::spawn(freebuff2api::api::thread_cleanup_loop(state.clone()));
+    } else {
+        tracing::info!("上游会话自动清理已关闭（thread_cleanup_interval_sec=0）");
+    }
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;

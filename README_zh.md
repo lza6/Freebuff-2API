@@ -29,26 +29,29 @@ cargo build --release
 
 ### 第 2 步：添加账号
 
-三种方式任选其一（面板「添加账号」卡片）：
+面板「账号」页 →「添加账号」卡片，三种方式任选其一：
 
 | 方式 | 适合谁 | 怎么做 |
 |------|--------|--------|
-| 一键登录 | 桌面版用户 | 托盘菜单 →「➕ 一键登录新账号」→ 浏览器里登录 freebuff.com → Cookie 自动入库 |
-| 粘贴导入 | 有浏览器的人 | 浏览器 F12 → Network → 复制任意请求的 Cookie → 粘贴到面板导入框 |
+| **一键登录（全自动）** | 浏览器用户（推荐） | 装一次扩展（面板「⬇ 下载扩展」→ `chrome://extensions` 开发者模式加载）→ 回面板点「重新检测」→ 点「🔑 一键登录」→ 扩展自动打开 freebuff.com，你登录完凭证就自动入库 |
+| 一键登录（桌面版） | 桌面安装包用户 | 托盘菜单 →「➕ 一键登录新账号」→ 浏览器里登录 freebuff.com → Cookie 自动入库（Electron 主进程直接读，无需扩展） |
+| 粘贴导入 | 不想装扩展 | 面板点「一键登录」→ 按 3 步向导：浏览器 F12 → Network → 复制 `Cookie:` 整行 → 粘贴到导入框 |
 | 文件导入 | 开发者 | 把 curl 命令或 HAR 文件内容粘贴到导入框 |
 
-> 多账号可重复添加，网关自动轮询、健康评分、失败冷却。
+> 为什么浏览器版要装扩展？上游登录 Cookie 是 **HttpOnly**（浏览器安全策略禁止网页脚本读取），扩展的 `chrome.cookies` 是浏览器上唯一合法的读取途径。
+> 凭证按值**自动去重**，列表里能看到**账号昵称/邮箱、套餐、今日剩余积分、入库时间**，每行可「检查 / 详情 / 删除」。
+> 多账号可重复添加，网关自动轮询、健康评分、失败冷却（Bearer 版账号池全量轮询；web Cookie 凭证当前由桥接路径使用第一个有效凭证）。
 
 ### 第 3 步：接入你的客户端
 
-网关默认监听 `http://127.0.0.1:47821`。**下面的配置直接抄**：
+网关默认监听 `http://127.0.0.1:47821`。**面板「总览」页顶部「🚀 立刻开始请求」卡片直接给出地址与 Key，可一键复制**；下面是等价的手抄版：
 
 **Claude Code**（Anthropic 协议）
 
 ```bash
 # macOS / Linux
 export ANTHROPIC_BASE_URL=http://127.0.0.1:47821
-export ANTHROPIC_API_KEY=sk-local   # config.json 未配置 api_keys 时可随意填
+export ANTHROPIC_API_KEY=sk-local   # 未配置 api_keys 时可随意填；面板可一键生成真 Key
 
 # Windows PowerShell
 $env:ANTHROPIC_BASE_URL="http://127.0.0.1:47821"
@@ -59,7 +62,7 @@ $env:ANTHROPIC_API_KEY="sk-local"
 
 ```
 Base URL: http://127.0.0.1:47821/v1
-API Key:  sk-local（未配置 api_keys 时随意填）
+API Key:  sk-local（未配置 api_keys 时随意填；或点面板「生成并启用 Key」）
 模型:      从 http://127.0.0.1:47821/v1/models 的列表里选
 ```
 
@@ -111,10 +114,18 @@ print(resp.choices[0].message.content)
 | `/v1/models` | GET | 可用模型列表 |
 | `/v1/web/chat` | POST | web 协议对话（Cookie 鉴权，支持多模态 images） |
 | `/v1/uploads` | POST | 上传文件换取 storageId（裸 body + `x-file-name` 头） |
-| `/api/tokens/import` | POST | 导入 curl / HAR / Cookie（`{"cookie": "..."}` 或纯文本） |
-| `/api/tokens` | GET | 已导入凭证（脱敏） |
+| `/api/tokens/import` | POST | 导入 curl / HAR / Cookie（`{"cookie": "..."}` 或纯文本），同值自动去重 |
+| `/api/tokens` | GET | 已导入凭证（稳定 id / 掩码 / 类型 / 入库时间 / 账号信息缓存） |
+| `/api/tokens/check` | POST | 对指定凭证拉取账号全貌并刷新缓存 `{id}` |
+| `/api/tokens/delete` | POST | 删除凭证 `{id}`（同时移出账号池） |
+| `/api/account/overview` | GET | 账号全貌（身份 / 用量统计 / 套餐 / 今日剩余，全中文数据源） |
+| `/api/account/history` | GET | 账号使用记录 `?cred_id=&limit=` |
 | `/api/account/balance` | GET | 账号积分 / 每模型今日剩余 |
 | `/api/account/detail` | POST | 账号详情卡片 |
+| `/api/account/refresh` | POST | 凭证保活检查（上游 convex-token） |
+| `/api/guide` | GET | 客户端接入信息（地址 / Key 状态 / 模型数） |
+| `/api/extension/bundle` | GET | 下载浏览器一键登录扩展 zip |
+| `/api/config/api-key` | POST | 运行时生成 / 设置 / 清除下游 API Key（立即生效并写回 config.json） |
 | `/api/skills` | GET / POST | 技能列表（含 roster 预览）/ 新建·更新 |
 | `/api/skills/toggle` | POST | 启用 / 禁用技能 |
 | `/api/skills/delete` | POST | 删除自定义技能 |

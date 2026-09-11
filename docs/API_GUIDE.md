@@ -59,10 +59,26 @@ docker run -d -p 47821:47821 -v /data:/data freebuff2api
 ### 账号与凭证
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/tokens/import` | POST | 粘贴 curl/HAR/Cookie 自动提取凭证入库（也接受 `{"cookie":"..."}` JSON） |
-| `/api/tokens` | GET | 列出已导入 token（脱敏） |
+| `/api/tokens/import` | POST | 粘贴 curl/HAR/Cookie 自动提取凭证入库（也接受 `{"cookie":"..."}` JSON）；同值自动去重，返回 `added` |
+| `/api/tokens` | GET | 列出已导入凭证：稳定 `id`、掩码、类型、入库时间、最近一次账号信息缓存 `meta` |
+| `/api/tokens/check` | POST | 对指定凭证拉取账号全貌并刷新缓存 `{id}` → `{ok, valid, meta}` |
+| `/api/tokens/delete` | POST | 删除凭证 `{id}`（同时移出运行中的账号池） |
+| `/api/account/overview` | GET | 账号全貌（身份/用量统计/套餐/额度积分），聚合上游 4 个端点 |
+| `/api/account/history` | GET | 账号使用记录（每次检查/刷新一条快照）`?cred_id=&limit=` |
 | `/api/account/balance` | GET | 账号积分/每模型剩余次数/套餐/地区限制 |
 | `/api/account/detail` | POST | 账号详情卡片（余额+用量+用户+套餐） |
+| `/api/account/refresh` | POST | 凭证保活检查（调上游 convex-token 验证 Cookie 是否有效） |
+| `/api/guide` | GET | 客户端接入信息：监听地址、OpenAI/Anthropic 地址、Key 状态、模型数与样例 |
+
+### 浏览器扩展
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/extension/bundle` | GET | 下载一键登录扩展 zip（内容编译期内嵌，单文件分发亦可用；配 api_keys 时可用 `?key=`） |
+
+### 配置
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/config/api-key` | POST | 运行时管理下游 API Key：`{"action":"generate"\|"set"\|"clear","key"?}`；**立即生效**并写回 `config.json`（非本机监听时禁止清空） |
 
 ### 技能（Skills）
 | 端点 | 方法 | 说明 |
@@ -131,11 +147,39 @@ docker run -d -p 47821:47821 -v /data:/data freebuff2api
 
 ## 常见问题
 
+### 浏览器版怎么一键登录？
+上游登录 Cookie 是 **HttpOnly**，网页脚本读不到，所以浏览器版必须借助扩展：
+
+1. 面板「账号」页 → 点「⬇ 下载扩展」得到 zip（或直接用项目里的 `browser-extension/` 目录）→ 解压
+2. 浏览器打开 `chrome://extensions`（Edge 为 `edge://extensions`）→ 打开「开发者模式」→「加载已解压的扩展程序」→ 选中解压目录
+3. 回到面板 → 点「重新检测」，状态变成 **扩展已就绪** → 点「🔑 一键登录」
+
+之后是**全自动**的：扩展自动打开 freebuff.com → 你完成 GitHub 登录 → 扩展自动把凭证写回网关 → 面板自动刷新出账号全貌。
+
+没装扩展也能用：点「一键登录」会打开 freebuff.com 并给出 3 步复制向导（约 30 秒）。桌面版（Electron）则由主进程直接读取，托盘一键全自动。
+
 ### 为什么余额查不到？
 余额端点需要 **web 版 Cookie**（`__Secure-next-auth.session-token=...`），不是桌面版 Bearer token。浏览器登录 freebuff.com → DevTools → Copy as cURL → 粘贴到 `/api/tokens/import`。
 
+### 导入凭证后怎么开始请求？
+面板「总览」页顶部「🚀 立刻开始请求」卡片直接给出 Base URL 与 API Key（可一键复制）：
+
+- OpenAI 协议：`http://127.0.0.1:47821/v1`（Cursor / LobeChat / SDK）
+- Anthropic 协议：`http://127.0.0.1:47821`（Claude Code）
+- API Key：未配置 `api_keys` 时任意非空字符串即可（如 `sk-local`）；点「生成并启用 Key」可一键生成并立即生效
+
+「接入指南」页有各客户端的现成配置片段，直接复制即可。
+
+> **只导入 web Cookie（一键登录）也能用 /v1**：账号池没有 Bearer token 时，网关会把 `/v1/chat/completions` 与 `/v1/messages` 自动桥接到上游 web 协议（多轮对话复用同一个上游 thread，避免烧光每日会话额度）。
+
+### 凭证列表里的"今日剩余"是什么意思？
+来自上游 `/api/web/freebuff-session` 的 `freebucks.daily` 与逐模型 `rateLimitsByModel`：
+- **今日剩余** = 每日积分（freebucks）剩余额度，太平洋时间午夜重置，隔天自动刷新
+- 逐模型「今日剩余次数」= 该模型当日可用次数上限 − 已用（点凭证行「详情」查看）
+- 每次「刷新账号全貌」或「检查」都会往「使用记录」追加一条快照，可按账号查询历史
+
 ### 如何多账号？
-桌面版：多个 Bearer token 填 `auth_tokens`。web 版：多次「一键登录」或多次导入 Cookie。
+桌面版：多个 Bearer token 填 `auth_tokens`。web 版：多次「一键登录」或多次导入 Cookie。凭证按值自动去重；每行可单独「检查 / 详情 / 删除」。
 
 ### 0 积分模型
 `upstage/solar-pro4` 0 积分免费（仍有每日 6 次池限制）；`z-ai/glm-5.3-flash` 走 Reward 奖励池。

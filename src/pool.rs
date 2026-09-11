@@ -319,6 +319,14 @@ impl Pool {
         accounts.push(entry);
         true
     }
+
+    /// 热移除账号（凭证被删除后调用），返回是否真的移除了
+    pub async fn remove_account(&self, token: &str) -> bool {
+        let mut accounts = self.accounts.lock().await;
+        let before = accounts.len();
+        accounts.retain(|a| a.token != token);
+        accounts.len() != before
+    }
 }
 
 /// 把 token 列表换为 Pool（无则返回空池）

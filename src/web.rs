@@ -98,6 +98,37 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
   </nav>
 
   <section id="tab-overview">
+    <!-- 立刻开始请求：地址 + Key + 一键复制（回答"导入凭证之后呢？"） -->
+    <div class="panel" id="connect-panel">
+      <div class="row" style="margin-bottom:10px">
+        <h2 style="margin:0">🚀 立刻开始请求</h2>
+        <span style="flex:1"></span>
+        <span id="connect-ready" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="grid" style="gap:16px">
+        <div>
+          <label>接口地址（Base URL）</label>
+          <div class="row"><input id="c-base" readonly style="flex:1"><button class="ghost sm" onclick="copyText(document.getElementById('c-base').value)">复制</button></div>
+          <label style="margin-top:8px">OpenAI 协议地址（Cursor / LobeChat / SDK）</label>
+          <div class="row"><input id="c-openai" readonly style="flex:1"><button class="ghost sm" onclick="copyText(document.getElementById('c-openai').value)">复制</button></div>
+          <label style="margin-top:8px">Anthropic 协议地址（Claude Code）</label>
+          <div class="row"><input id="c-anthropic" readonly style="flex:1"><button class="ghost sm" onclick="copyText(document.getElementById('c-anthropic').value)">复制</button></div>
+        </div>
+        <div>
+          <label>API Key</label>
+          <div class="row"><input id="c-key" readonly style="flex:1"><button class="ghost sm" onclick="copyText(document.getElementById('c-key').value)">复制</button></div>
+          <div class="row" style="margin-top:8px">
+            <button class="sm" onclick="genApiKey()">生成并启用 Key</button>
+            <button class="ghost sm" onclick="clearApiKey()">清除 Key</button>
+          </div>
+          <div id="c-key-hint" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+          <div id="c-model-hint" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:13px;color:var(--muted)">把上面两项填进客户端就能用了 —— 现成配置片段见
+        <a href="#" onclick="showTab('guide');return false" style="color:var(--accent)">接入指南</a>。</div>
+    </div>
+
     <div class="grid">
       <div class="panel"><h2>账号健康度</h2><div id="acc-wrap"></div></div>
       <div class="panel"><h2>近 7 天用量</h2><div id="daily-wrap"></div></div>
@@ -108,12 +139,46 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
   </section>
 
   <section id="tab-account" style="display:none">
+    <!-- 账号全貌（身份 / 用量 / 套餐 / 积分） -->
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px">
+        <h2 style="margin:0">账号全貌</h2>
+        <span style="flex:1"></span>
+        <button class="ghost sm" onclick="refreshAccountOverview()">刷新</button>
+        <button class="ghost sm" onclick="refreshCredential()">🔄 保活检查</button>
+      </div>
+      <div id="overview-wrap"><div class="empty">点「刷新」拉取账号信息（身份 / 连续使用天数 / token 消耗 / 套餐 / 今日剩余积分）</div></div>
+    </div>
+
+    <!-- 添加账号（一键登录向导 / 粘贴导入） -->
     <div class="panel">
       <h2>添加账号</h2>
       <div class="row" style="margin-bottom:10px">
-        <button onclick="oneClickLogin()">🔑 一键登录（桌面版）</button>
-        <span style="color:var(--muted);font-size:12px">或在下方粘贴 Cookie / cURL / HAR 内容</span>
+        <button onclick="oneClickLogin()">🔑 一键登录</button>
+        <span id="ext-status" class="badge dim">检测扩展中…</span>
+        <button class="ghost sm" onclick="downloadExtension()">⬇ 下载扩展</button>
+        <button class="ghost sm" onclick="pingExtension(true)">重新检测</button>
       </div>
+
+      <div id="login-wizard" style="display:none;border:1px solid var(--accent);border-radius:8px;padding:14px;margin-bottom:12px;background:linear-gradient(135deg,#132a4a,#161b22)">
+        <div class="row" style="margin-bottom:8px"><b>浏览器版一键登录</b><span style="flex:1"></span><button class="ghost sm" onclick="document.getElementById('login-wizard').style.display='none'">收起</button></div>
+        <div id="wizard-ext" style="font-size:13px;margin-bottom:10px;padding:8px;background:#0d1117;border-radius:6px">
+          <b>方案 A（推荐 · 全自动）：Chrome / Edge 扩展</b>
+          <ol style="margin:6px 0 0 20px;color:var(--muted);line-height:1.9">
+            <li>点上方「⬇ 下载扩展」得到 zip → 解压到任意目录（也可直接用项目里的 <code>browser-extension/</code> 目录）</li>
+            <li>打开 <code>chrome://extensions</code>（Edge 为 <code>edge://extensions</code>）→ 打开「开发者模式」→「加载已解压的扩展程序」→ 选中刚解压的目录</li>
+            <li>回到本页点「重新检测」→ 状态变成 <span class="badge ok">已就绪</span> 后，再点「一键登录」即可<b>全自动</b>：自动打开 freebuff.com → 你完成 GitHub 登录 → 凭证自动入库</li>
+          </ol>
+        </div>
+        <b style="font-size:13px">方案 B（30 秒手动）：3 步复制</b>
+        <ol style="margin:6px 0 10px 20px;font-size:13px;color:var(--muted);line-height:2">
+          <li><button class="ghost sm" onclick="window.open('https://freebuff.com/','_blank','noopener')">① 打开 freebuff.com 并登录</button>（GitHub 登录即可）</li>
+          <li>按 <b>F12</b> → <b>Network</b> → 刷新 → 点任意请求 → <b>Headers</b> 里找 <code>Cookie:</code> 整行复制（或 Application → Cookies 里复制 <code>__Secure-next-auth.session-token</code> 的值）</li>
+          <li>回到本页面粘贴到下方输入框 → 点「导入」→ 回到顶部点「刷新」</li>
+        </ol>
+        <div style="font-size:12px;color:var(--muted)">💡 为什么网页不能全自动？上游登录 Cookie 标记为 HttpOnly（浏览器禁止网页脚本读取）——扩展可以合法读取；桌面版由 Electron 主进程读取，因此桌面版是托盘一键全自动。</div>
+      </div>
+
       <textarea id="import-text" placeholder="粘贴以下任意一种：
 1) 浏览器 Cookie 串（含 __Secure-next-auth.session-token=...）
 2) 从 DevTools 复制的 cURL (bash) 命令
@@ -122,17 +187,33 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
         <button onclick="doImport()">导入</button>
         <span id="import-result" style="font-size:13px;color:var(--muted)"></span>
       </div>
-      <details style="margin-top:12px"><summary>怎么获取 Cookie？（点击展开）</summary>
+      <details style="margin-top:12px"><summary>怎么获取 Cookie？（点击展开详细图文说明）</summary>
         <ol style="margin:10px 0 0 20px;font-size:13px;color:var(--muted);line-height:1.9">
           <li>浏览器登录 freebuff.com</li>
           <li>按 F12 打开开发者工具 → Network 标签</li>
           <li>刷新页面，点任意请求 → Headers → 找到 <code>Cookie:</code> 开头那一整行</li>
           <li>整行复制，粘贴到上面的框里，点「导入」</li>
+          <li>也可以在 Application → Cookies → https://freebuff.com 里逐项复制（需要包含 <code>__Secure-next-auth.session-token</code>）</li>
         </ol>
       </details>
     </div>
-    <div class="panel"><h2>已入库凭证</h2><div id="tokens-wrap"></div></div>
-    <div class="panel"><h2>账号详情</h2><button class="ghost sm" onclick="loadAccountDetail()">查询余额与订阅</button><div id="detail-wrap" style="margin-top:10px"></div></div>
+
+    <!-- 凭证列表 -->
+    <div class="panel">
+      <h2>已入库凭证 <span id="cred-count" style="font-weight:400;color:var(--muted);font-size:12px"></span></h2>
+      <div id="tokens-wrap"></div>
+    </div>
+
+    <!-- 使用记录（每个账号的额度/消耗快照，可查历史） -->
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px">
+        <h2 style="margin:0">使用记录</h2>
+        <span style="flex:1"></span>
+        <select id="hist-cred" style="width:auto" onchange="loadHistory()"><option value="">全部账号</option></select>
+        <button class="ghost sm" onclick="loadHistory()">刷新</button>
+      </div>
+      <div id="hist-wrap"><div class="empty">每次「刷新账号全貌」或「检查」都会记录一条 —— 点「刷新」查看</div></div>
+    </div>
   </section>
 
   <section id="tab-skills" style="display:none">
@@ -213,7 +294,13 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
         <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
         上游免费层通过"会话 + 广告刷新"维持额度：网关每 45 秒心跳，会话剩余不足时触发广告刷新延长。
         出现 <code>waiting_room_queued</code> 表示上游在排队——不是网关故障，稍等重试或多加账号提升并发。</p></details>
-      <details><summary><b>⑥ 数据都存在哪</b></summary>
+      <details><summary><b>⑥ 上游会话自动清理</b></summary>
+        <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
+        每次对话在上游都会生成一个 thread。网关记录自己创建的 thread，并<b>每小时</b>清理超过
+        <b>24 小时</b>的旧会话（<code class="ok">thread_cleanup_interval_sec</code> /
+        <code class="ok">thread_max_age_hours</code> 可调，间隔设 0 关闭）——避免反代长期堆积给上游制造压力。
+        也可在「原理」页对应的 API 手动预演：<code>POST /api/threads/cleanup {"dry_run":true}</code>。</p></details>
+      <details><summary><b>⑦ 数据都存在哪</b></summary>
         <p style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:6px">
         全部本地：<code>data/freebuff2api.sqlite</code>（用量）、<code>data/telemetry.sqlite</code>（请求详情）、
         <code>data/memory.sqlite</code>（记忆）、<code>data/skills/</code>（技能 Markdown，真相源）、
@@ -246,13 +333,30 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
   <section id="tab-guide" style="display:none">
     <div class="panel">
       <h2>把这个网关接入你的 AI 客户端</h2>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:10px">网关地址：<code id="guide-base">http://127.0.0.1:47821</code>（API 前缀加 <code>/v1</code>）</p>
+      <div style="background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0 16px;font-size:13px;line-height:2">
+        <b>三步走：</b>
+        ① 在「账号」页导入凭证（或一键登录）→
+        ② 确认上方状态灯为绿色（网关运行中）→
+        ③ 按下面任意一种方式配置你的客户端即可开始对话。
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:10px">网关地址：<code id="guide-base">http://127.0.0.1:47821</code>（OpenAI 协议加 <code>/v1</code> 后缀；Anthropic 协议不加）</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:10px"><b>API Key 填什么？</b> <span id="guide-key-hint">config.json 未配置 api_keys 时，任意字符串即可（如 <code>sk-local</code>）</span></p>
+
       <h2 style="margin-top:16px">Claude Code（Anthropic 协议）</h2>
       <pre id="g-claude"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-claude').textContent)">复制</button>
+
       <h2 style="margin-top:16px">Cursor / Continue / 通用 OpenAI 客户端</h2>
       <pre id="g-openai"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-openai').textContent)">复制</button>
+
       <h2 style="margin-top:16px">OpenAI SDK (Python)</h2>
       <pre id="g-py"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-py').textContent)">复制</button>
+
+      <h2 style="margin-top:16px">OpenAI SDK (Node.js)</h2>
+      <pre id="g-node"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-node').textContent)">复制</button>
+
+      <h2 style="margin-top:16px">curl 快速验证</h2>
+      <pre id="g-curl"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-curl').textContent)">复制</button>
+
       <h2 style="margin-top:16px">LobeChat / NextChat / Cherry Studio</h2>
       <pre id="g-lobe"></pre><button class="ghost sm" onclick="copyText(document.getElementById('g-lobe').textContent)">复制</button>
     </div>
@@ -266,7 +370,15 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
 const $ = (id) => document.getElementById(id);
 // 可选 API Key（配置了 api_keys 时，面板请求需带 Authorization）
 function apiKey() { try { return localStorage.getItem('freebuff_api_key') || ''; } catch (e) { return ''; } }
-function setApiKey(v) { try { localStorage.setItem('freebuff_api_key', v.trim()); toast(v.trim() ? 'API Key 已保存（刷新页面生效）' : 'API Key 已清除'); } catch (e) {} }
+function setApiKey(v) {
+  try {
+    localStorage.setItem('freebuff_api_key', v.trim());
+    toast(v.trim() ? 'API Key 已保存，正在重新加载…' : 'API Key 已清除，正在重新加载…');
+    authWarned = false;
+    loadGuide();
+    refreshOverview();
+  } catch (e) {}
+}
 async function api(url, opt) {
   opt = opt || {};
   opt.headers = Object.assign({}, opt.headers || {});
@@ -292,21 +404,94 @@ function showTab(name) {
   if (name === 'skills') refreshSkills();
   if (name === 'memory') refreshMemory();
   if (name === 'doctor') refreshDoctor();
-  if (name === 'account') { refreshTokens(); loadBalance(); }
+  if (name === 'account') { pingExtension(); refreshTokens(); loadHistory(); }
+  if (name === 'overview') { loadBalance(); loadGuide(); }
   if (name === 'logs') initLogs();
-  if (name === 'guide') fillGuide();
+  if (name === 'guide') loadGuide();
 }
-function fillGuide() {
+
+// ---------- 接入信息（地址 / Key / 客户端配置） ----------
+let guideCache = null;
+/**
+ * 拉取 /api/guide 并渲染「立刻开始请求」卡 + 接入指南。
+ * 地址与 Key 都由服务端给出，避免前端硬编码与实际监听地址不一致。
+ */
+async function loadGuide() {
+  let g = null;
+  try { g = await api('/api/guide'); } catch (e) { g = null; }
+  // 区分两种"拿不到"：接口明确回了未配置 vs 请求本身失败（后者最常见的原因是已启用 Key 但本地没存）
+  const unknown = !g || !g.ok;
+  if (unknown) {
+    g = { listen_addr: location.host, openai_base_url: '/v1', anthropic_base_url: '/', api_keys: null, api_key_hint: '', models_count: null, models_sample: [], data_plane_ready: null };
+  }
+  guideCache = g;
   const base = location.origin;
-  $('guide-base').textContent = base;
-  $('g-claude').textContent = `# macOS / Linux\nexport ANTHROPIC_BASE_URL=${base}\nexport ANTHROPIC_API_KEY=sk-local\n\n# Windows PowerShell\n$env:ANTHROPIC_BASE_URL="${base}"\n$env:ANTHROPIC_API_KEY="sk-local"`;
-  $('g-openai').textContent = `Base URL: ${base}/v1\nAPI Key:  sk-local（本机未配置 api_keys 时随意填）\n模型:     在 ${base}/v1/models 中选一个`;
-  $('g-py').textContent = `from openai import OpenAI\nclient = OpenAI(base_url="${base}/v1", api_key="sk-local")\nresp = client.chat.completions.create(model="z-ai/glm-5.3-flash", messages=[{"role":"user","content":"你好"}])\nprint(resp.choices[0].message.content)`;
-  $('g-lobe').textContent = `接口地址: ${base}/v1\nAPI Key:  sk-local\n模型名:   手动填 /v1/models 列表中的值（如 z-ai/glm-5.3-flash）`;
+  if ($('c-base')) {
+    $('c-base').value = base;
+    $('c-openai').value = base + '/v1';
+    $('c-anthropic').value = base;
+    const configured = !!(g.api_keys && g.api_keys.configured);
+    const local = apiKey();
+    $('c-key').value = unknown
+      ? (local || '（无法读取接入信息 —— 请在页面右上角填入 API Key）')
+      : (configured
+        ? (local || '（已启用校验 — 点「生成并启用 Key」或把已有 Key 粘到右上角输入框）')
+        : 'sk-local');
+    $('c-key-hint').innerHTML = unknown
+      ? `⚠️ 读取接入信息失败${local ? '（本地已存 Key，若仍失败说明 Key 不正确）' : ''} —— 若你在 config.json 配置了 api_keys，请把它粘到页面右上角的输入框。`
+      : (configured
+        ? `🔒 已启用 API Key 校验（${g.api_keys.count} 个：${(g.api_keys.masked || []).map(esc).join('、')}）。客户端必须填对 Key。`
+        : `🔓 未配置 API Key —— 仅本机可访问，客户端随便填一个非空字符串（如 <code>sk-local</code>）即可。`);
+    $('c-model-hint').innerHTML = unknown
+      ? '模型列表与可用数量需要鉴权后才能读取。'
+      : `可用模型 <b>${g.models_count}</b> 个${(g.models_sample || []).length ? '，例如 ' + g.models_sample.slice(0, 3).map(esc).join('、') + ' …' : ''}（完整列表：<code>${esc(base)}/v1/models</code>）`;
+    $('connect-ready').innerHTML = g.data_plane_ready === true
+      ? '<span class="tok">✅ 凭证已就绪，可以开始请求</span>'
+      : g.data_plane_ready === false
+        ? '<span class="twarn">⚠️ 还没有凭证 —— 先去「账号」页一键登录</span>'
+        : '<span style="color:var(--muted)">状态未知（需要鉴权）</span>';
+  }
+  fillGuide(g);
+}
+async function genApiKey() {
+  if (!confirm('生成新的 API Key 并立即生效？\n\n生成后你的客户端需要填这个新 Key（本面板会自动记住）。')) return;
+  try {
+    const r = await api('/api/config/api-key', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'generate' }) });
+    if (r.key) { try { localStorage.setItem('freebuff_api_key', r.key); } catch (e) {} }
+    toast(r.message || '已生成', 6000);
+    loadGuide();
+  } catch (e) { toast('生成失败：' + e.message, 7000); }
+}
+async function clearApiKey() {
+  if (!confirm('清除 API Key？\n\n清除后网关变回「仅本机可访问、Key 随便填」模式。')) return;
+  try {
+    const r = await api('/api/config/api-key', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'clear' }) });
+    try { localStorage.removeItem('freebuff_api_key'); } catch (e) {}
+    toast(r.message || '已清除', 6000);
+    loadGuide();
+  } catch (e) { toast('清除失败：' + e.message, 7000); }
+}
+function fillGuide(g) {
+  const base = location.origin;
+  const key = (g && g.api_keys && g.api_keys.configured) ? (apiKey() || '<你在面板生成的 Key>') : 'sk-local';
+  const model = (g && (g.models_sample || [])[0]) || 'z-ai/glm-5.3-flash';
+  const gb = $('guide-base'); if (gb) gb.textContent = base;
+  const gk = $('guide-key-hint');
+  if (gk) gk.innerHTML = (g && g.api_keys && g.api_keys.configured)
+    ? '已在面板生成并启用了 API Key —— 客户端必须填这个 Key（本页面右上角已自动记住）'
+    : 'config.json 未配置 api_keys 时，任意字符串即可（如 <code>sk-local</code>）';
+  $('g-claude').textContent = `# macOS / Linux\nexport ANTHROPIC_BASE_URL=${base}\nexport ANTHROPIC_API_KEY=${key}\n\n# Windows PowerShell\n$env:ANTHROPIC_BASE_URL="${base}"\n$env:ANTHROPIC_API_KEY="${key}"\n\n# 然后正常启动 Claude Code 即可（claude 命令）`;
+  $('g-openai').textContent = `Base URL: ${base}/v1\nAPI Key:  ${key}\n模型:     在 ${base}/v1/models 中选一个（共 ${(g && g.models_count) || '?'} 个）`;
+  $('g-py').textContent = `from openai import OpenAI\nclient = OpenAI(base_url="${base}/v1", api_key="${key}")\nresp = client.chat.completions.create(model="${model}", messages=[{"role":"user","content":"你好"}])\nprint(resp.choices[0].message.content)`;
+  $('g-node').textContent = `import OpenAI from "openai";\nconst client = new OpenAI({ baseURL: "${base}/v1", apiKey: "${key}" });\nconst r = await client.chat.completions.create({ model: "${model}", messages: [{ role: "user", content: "你好" }] });\nconsole.log(r.choices[0].message.content);`;
+  $('g-curl').textContent = `curl ${base}/v1/chat/completions \\\n  -H "content-type: application/json" \\\n  -H "authorization: Bearer ${key}" \\\n  -d "{\\"model\\":\\"${model}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"说句话证明通啦\\"}]}"`;
+  $('g-lobe').textContent = `接口地址: ${base}/v1\nAPI Key:  ${key}\n模型名:   手动填 /v1/models 列表中的值（如 ${model}）`;
 }
 
 // ---------- 总览 ----------
 let lastHealth = null;
+let authWarned = false;      // 鉴权失败只提示一次，不狂闪
+let overviewTimer = null;    // 总览自动刷新句柄（鉴权失败时暂停，填 Key 后恢复）
 async function refreshOverview() {
   try {
     const health = await api('/healthz');
@@ -359,7 +544,28 @@ async function refreshOverview() {
     const models = await api('/api/usage/models');
     $('model-count').textContent = (models || []).length;
     $('models-wrap').innerHTML = (models || []).map(m => `<span class="chip">${esc(m)}</span>`).join('') || '<div class="empty">模型列表为空（检查上游连通性）</div>';
-  } catch (e) { $('dot').className = 'dot err'; toast('加载失败: ' + e.message); }
+    if (authWarned) { authWarned = false; $('banner').innerHTML = ''; }
+    if (!overviewTimer) startOverviewTimer();
+  } catch (e) {
+    $('dot').className = 'dot err';
+    const m = String(e.message || '');
+    // 网关启用了 API Key 而浏览器还没填：给一次性引导，并暂停自动刷新（否则红灯 + toast 每 6 秒狂闪）
+    if (/unauthorized|api key|鉴权|认证/i.test(m)) {
+      if (!authWarned) {
+        authWarned = true;
+        toast('该网关已启用 API Key 校验 —— 请在页面右上角输入框填入 Key', 8000);
+        $('banner').innerHTML = `<div class="banner"><h2>🔑 需要鉴权</h2>
+          <p style="font-size:13px;color:var(--muted);margin-top:6px">网关配置了 <code>api_keys</code>。在<b>页面右上角的输入框</b>填入 Key（只存本机浏览器），填完这里会自动恢复。</p></div>`;
+        if (overviewTimer) { clearInterval(overviewTimer); overviewTimer = null; }
+      }
+    } else {
+      toast('加载失败: ' + m);
+    }
+  }
+}
+function startOverviewTimer() {
+  if (overviewTimer) clearInterval(overviewTimer);
+  overviewTimer = setInterval(() => { if ($('tab-overview').style.display !== 'none') refreshOverview(); }, 6000);
 }
 
 async function loadBalance() {
@@ -424,14 +630,116 @@ function explain(r) {
   return '暂无解释数据。';
 }
 
+// ---------- 浏览器扩展桥（面板 ↔ 扩展 直连） ----------
+// 扩展的 bridge.js content script 会 postMessage 广播自己的 id；
+// 拿到 id 后本页就能用 chrome.runtime.sendMessage 直接指挥扩展读 Cookie（真正的一键登录）。
+let extId = null, extVersion = '';
+function pingExtension(showToast) {
+  try { window.postMessage({ source: 'freebuff2api-page', type: 'ping' }, location.origin); } catch (e) {}
+  if (showToast) setTimeout(() => {
+    toast(extId ? `扩展已就绪（v${extVersion || '?'}）` : '未检测到扩展 —— 可点「⬇ 下载扩展」安装，或用手动向导', 5000);
+  }, 600);
+}
+window.addEventListener('message', (e) => {
+  if (e.source !== window) return;
+  const d = e.data;
+  if (!d || d.source !== 'freebuff2api-extension' || typeof d.id !== 'string') return;
+  const isNew = extId !== d.id;
+  extId = d.id; extVersion = d.version || '';
+  renderExtStatus();
+  if (isNew && $('tab-account') && $('tab-account').style.display !== 'none') { /* 首次进入时静默 */ }
+});
+function renderExtStatus() {
+  const el = $('ext-status');
+  if (!el) return;
+  if (extId) { el.className = 'badge ok'; el.textContent = `扩展已就绪 v${extVersion || '?'}`; }
+  else { el.className = 'badge dim'; el.textContent = '未检测到扩展（可手动粘贴导入）'; }
+}
+function extensionAvailable() {
+  return !!extId && typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
+}
+function sendToExtension(msg) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('扩展未在规定时间内响应（可能被浏览器回收，请刷新页面重试）')), 20000);
+    try {
+      chrome.runtime.sendMessage(extId, msg, (resp) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+        resolve(resp);
+      });
+    } catch (e) { clearTimeout(timer); reject(e); }
+  });
+}
+function downloadExtension() {
+  const k = apiKey();
+  window.open('/api/extension/bundle' + (k ? '?key=' + encodeURIComponent(k) : ''), '_blank');
+}
+
 // ---------- 账号 / 导入 ----------
 async function oneClickLogin() {
+  // 路径 1：桌面版 Electron（主进程可直接读 HttpOnly Cookie）
   if (window.freebuffDesktop && window.freebuffDesktop.openLogin) {
     window.freebuffDesktop.openLogin();
-    toast('已打开登录窗口，请在其中登录 freebuff.com');
-  } else {
-    toast('浏览器访问时请用下方「粘贴导入」；桌面版支持托盘一键登录');
+    toast('已打开登录窗口，登录 freebuff.com 后 Cookie 会自动入库');
+    return;
   }
+  // 路径 2：浏览器扩展直连 —— 全自动（自动打开 freebuff.com → 等待登录 → 自动入库）
+  if (extensionAvailable()) {
+    await oneClickViaExtension();
+    return;
+  }
+  // 路径 3：降级为手动向导
+  $('login-wizard').style.display = '';
+  window.open('https://freebuff.com/', '_blank', 'noopener');
+  toast('未检测到浏览器扩展 —— 已打开 freebuff.com，请按向导完成（装扩展可全自动）', 7000);
+}
+async function oneClickViaExtension() {
+  toast('正在通知扩展…', 3000);
+  const before = await tokenCount();
+  let resp = null;
+  try {
+    resp = await sendToExtension({ type: 'freebuff2api.import', gatewayPort: Number(location.port || 47821), apiKey: apiKey() });
+  } catch (e) {
+    toast('调用扩展失败：' + e.message, 7000);
+    return;
+  }
+  if (resp && resp.ok === false) { toast('扩展返回：' + (resp.message || '导入失败'), 8000); return; }
+  if (resp && resp.done) {
+    // 扩展已同步完成（已登录且已导入 / 或已存在去重）—— 无需轮询
+    if (resp.added > 0) {
+      toast(`✅ 扩展已导入 ${resp.added} 个凭证`, 6000);
+      refreshTokens(); refreshAccountOverview(); loadHistory();
+    } else {
+      toast('该账号凭证已在库中（同值自动去重，无需重复导入）', 7000);
+      refreshTokens();
+    }
+    return;
+  }
+  if (resp && resp.needLogin) {
+    toast('已自动打开 freebuff.com —— 完成 GitHub 登录后凭证会自动入库（最多等 3 分钟）', 9000);
+  } else {
+    toast('扩展已开始导入，正在等待凭证入库…', 6000);
+  }
+  pollForNewCredential(before, 180000);
+}
+async function tokenCount() {
+  try { const r = await api('/api/tokens'); return (r.tokens || []).length; } catch (e) { return -1; }
+}
+/** 轮询等待扩展把凭证写进网关（扩展是独立进程，只能靠轮询收敛） */
+async function pollForNewCredential(before, timeoutMs) {
+  // 基线没取到（before<0）时先补取一次，避免"任何请求成功都误报为入库"
+  if (before < 0) before = await tokenCount();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 3000));
+    const now = await tokenCount();
+    if (before >= 0 && now > before) {
+      toast('✅ 凭证已自动入库，正在拉取账号信息…', 6000);
+      refreshTokens(); refreshAccountOverview(); loadHistory();
+      return;
+    }
+  }
+  toast('等待登录超时 —— 完成登录后点扩展图标，或回到本页点「刷新」', 8000);
 }
 async function doImport() {
   const text = $('import-text').value.trim();
@@ -439,25 +747,234 @@ async function doImport() {
   $('import-result').textContent = '导入中…';
   try {
     const r = await api('/api/tokens/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cookie: text }) });
-    $('import-result').innerHTML = r.added > 0 ? `<span class="tok">✅ 成功导入 ${r.added} 个账号</span>` : `<span class="twarn">未新增（token 可能已存在）：${esc(r.message || '')}</span>`;
-    $('import-text').value = '';
-    refreshTokens(); refreshOverview();
+    if (r.added > 0) {
+      $('import-result').innerHTML = `<span class="tok">✅ 成功导入 ${r.added} 个凭证</span>`;
+      $('import-text').value = '';
+      $('login-wizard').style.display = 'none';
+      toast('导入成功，正在拉取账号信息…');
+      refreshTokens();
+      refreshAccountOverview();
+      loadHistory();
+    } else {
+      $('import-result').innerHTML = `<span class="twarn">该凭证已存在（同值自动去重，未重复入库）</span>`;
+      refreshTokens();
+    }
   } catch (e) { $('import-result').innerHTML = `<span class="terr">导入失败：${esc(e.message)}</span>`; }
 }
+
+// ---------- 凭证列表（账号详细信息 / 入库时间 / 检查 / 删除） ----------
+let tokenCache = [];
 async function refreshTokens() {
   try {
     const r = await api('/api/tokens');
     const list = r.tokens || [];
-    $('tokens-wrap').innerHTML = list.length ? `<table><thead><tr><th>Token</th><th>来源</th><th>Host</th><th>路径</th></tr></thead><tbody>${
-      list.map(t => `<tr><td><code>${esc(t.token_masked)}</code></td><td>${esc(t.source)}</td><td>${esc(t.host)}</td><td>${esc(t.path)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">还没有导入凭证</div>';
+    tokenCache = list;
+    $('cred-count').textContent = list.length ? `（${list.length} 个 · 同值自动去重）` : '';
+    fillHistoryCredOptions(list);
+    $('tokens-wrap').innerHTML = list.length ? `<table><thead><tr>
+        <th>账号</th><th>类型</th><th>凭证</th><th>套餐</th><th>今日剩余</th><th>入库时间</th><th>操作</th>
+      </tr></thead><tbody>${
+      list.map((t, i) => {
+        const m = t.meta || null;
+        const acct = m
+          ? `<div style="font-weight:600">${esc(m.name || '—')}</div><div style="font-size:12px;color:var(--muted)">${esc(m.email || '')}</div>`
+          : `<span style="color:var(--muted)">未检查</span>`;
+        const validBadge = m ? (m.valid ? badge('有效', 'ok') : badge('可能失效', 'err')) : '';
+        const tier = m ? (m.tier_id ? badge(m.tier_id, 'ok') : badge('免费', 'dim')) : '—';
+        const remain = (m && m.daily_remaining != null) ? `<b>${m.daily_remaining}</b> / ${m.daily_limit ?? '—'}` : '—';
+        const added = t.added_at ? new Date(t.added_at).toLocaleString('zh-CN', { hour12: false }) : '—';
+        return `<tr>
+          <td>${acct} ${validBadge}</td>
+          <td>${t.kind === 'web-cookie' ? badge('Web Cookie', 'ok') : badge('Bearer', 'dim')}</td>
+          <td><code>${esc(t.token_masked)}</code><div style="font-size:11px;color:var(--muted)">${esc(t.source || '')}${t.host ? ' · ' + esc(t.host) : ''}</div></td>
+          <td>${tier}</td>
+          <td style="font-size:12px">${remain}</td>
+          <td style="font-size:12px">${esc(added)}</td>
+          <td class="row">
+            <button class="ghost sm" onclick="checkCredAt(${i})">检查</button>
+            <button class="ghost sm" onclick="openCredDetail(${i})">详情</button>
+            <button class="ghost sm" onclick="deleteCredAt(${i})">删除</button>
+          </td></tr>`;
+      }).join('')}</tbody></table>` : '<div class="empty">还没有导入凭证 — 用上方「一键登录」或粘贴导入</div>';
   } catch (e) { $('tokens-wrap').innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; }
 }
-async function loadAccountDetail() {
-  $('detail-wrap').innerHTML = '<div class="empty">查询中…</div>';
+function checkCredAt(i) { const t = tokenCache[i]; if (t) checkCred(t.id); }
+function deleteCredAt(i) { const t = tokenCache[i]; if (t) deleteCred(t.id, (t.meta && t.meta.email) || t.token_masked); }
+function openCredDetail(i) { const t = tokenCache[i]; if (t) renderCredDetail(t); }
+
+async function checkCred(id) {
+  toast('正在检查该凭证…（需要几秒）');
   try {
-    const d = await api('/api/account/detail', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    $('detail-wrap').innerHTML = `<pre>${esc(JSON.stringify({ user: d.user, subscriptions: d.subscriptions, balance: d.balance, usage_summary: d.usage_summary }, null, 2))}</pre>`;
-  } catch (e) { $('detail-wrap').innerHTML = `<div class="empty">查询失败：${esc(e.message)}（需要先导入 web Cookie）</div>`; }
+    const r = await api('/api/tokens/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+    toast(r.message || (r.ok ? '凭证有效' : '凭证可能已失效'), 7000);
+    refreshTokens();
+    loadHistory();
+  } catch (e) { toast('检查失败：' + e.message, 7000); }
+}
+async function deleteCred(id, label) {
+  if (!confirm(`确定删除凭证 ${label || ''}？\n\n删除后会同时从运行中的账号池移除，需要重新登录导入才能恢复。`)) return;
+  try {
+    const r = await api('/api/tokens/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+    toast(r.message || '已删除', 5000);
+    refreshTokens();
+    loadHistory();
+  } catch (e) { toast('删除失败：' + e.message, 7000); }
+}
+function renderCredDetail(t) {
+  const m = t.meta;
+  $('drawer').classList.add('open');
+  $('dr-title').textContent = '凭证详情';
+  let html = '';
+  html += `<div class="kv"><b>凭证</b><code>${esc(t.token_masked)}</code></div>`;
+  html += `<div class="kv"><b>类型</b>${t.kind === 'web-cookie' ? 'Web Cookie（网页版登录）' : 'Bearer Token'}</div>`;
+  html += `<div class="kv"><b>来源</b>${esc(t.source || '—')}${t.host ? ' · ' + esc(t.host) : ''}</div>`;
+  html += `<div class="kv"><b>入库时间</b>${t.added_at ? new Date(t.added_at).toLocaleString('zh-CN', { hour12: false }) : '未知（旧数据）'}</div>`;
+  if (!m) {
+    html += `<div class="empty" style="margin-top:12px">这条凭证还没检查过 —— 点凭证列表里的「检查」即可拉取账号详细信息。</div>`;
+    $('dr-body').innerHTML = html;
+    return;
+  }
+  html += `<div class="kv"><b>检查时间</b>${m.checked_at ? new Date(m.checked_at).toLocaleString('zh-CN', { hour12: false }) : '—'} ${m.valid ? badge('有效', 'ok') : badge('可能失效', 'err')}</div>`;
+  html += '<div style="border-top:1px solid var(--border);margin:10px 0;padding-top:8px"><b>账号</b></div>';
+  if (m.image) html += `<img src="${esc(m.image)}" style="width:40px;height:40px;border-radius:50%;vertical-align:middle" onerror="this.style.display='none'">`;
+  html += `<div class="kv"><b>昵称</b>${esc(m.name || '—')}</div>`;
+  html += `<div class="kv"><b>邮箱</b>${esc(m.email || '—')}</div>`;
+  if (m.user_id) html += `<div class="kv"><b>用户 ID</b><code>${esc(m.user_id)}</code></div>`;
+  if (m.expires) html += `<div class="kv"><b>登录有效期</b>${new Date(m.expires).toLocaleString('zh-CN', { hour12: false })}</div>`;
+  html += '<div style="border-top:1px solid var(--border);margin:10px 0;padding-top:8px"><b>额度</b></div>';
+  html += `<div class="kv"><b>层级 / 套餐</b>${esc(m.access_tier || '—')} / ${esc(m.tier_id || '免费')}</div>`;
+  if (m.daily_limit != null) html += `<div class="kv"><b>今日积分</b>剩余 <b class="tok">${m.daily_remaining ?? '—'}</b> / ${m.daily_limit}（已用 ${m.daily_spent ?? 0}）</div>`;
+  if (m.reset_at) html += `<div class="kv"><b>下次重置</b>${new Date(m.reset_at).toLocaleString('zh-CN', { hour12: false })}</div>`;
+  if (m.streak_current != null) html += `<div class="kv"><b>连续使用</b>${m.streak_current} 天（累计活跃 ${m.all_time_active_days ?? '—'} 天）</div>`;
+  if (m.tokens_7d != null) html += `<div class="kv"><b>近 7 天 token</b>${m.tokens_7d.toLocaleString()}</div>`;
+  if (m.country_code) html += `<div class="kv"><b>地区</b>${esc(m.country_code)}${m.country_block_reason ? ' ' + badge(m.country_block_reason, 'err') : ''}</div>`;
+  if (m.error) html += `<div class="kv"><b>错误</b><span class="terr">${esc(m.error)}</span></div>`;
+  if ((m.models || []).length) {
+    html += `<details open style="margin-top:8px"><summary>逐模型今日剩余（${m.models.length}）</summary><table style="margin-top:6px"><thead><tr><th>模型</th><th>剩余</th><th>限额</th><th>已用</th><th>积分价</th></tr></thead><tbody>${
+      m.models.map(x => `<tr><td>${esc(x.model)}</td><td><b>${x.remaining ?? '—'}</b></td><td>${x.limit ?? '—'}</td><td>${x.used ?? 0}</td><td>${x.price === 0 ? '<b class="tok">免费</b>' : (x.price ?? '—')}</td></tr>`).join('')}</tbody></table></details>`;
+  }
+  $('dr-body').innerHTML = html;
+}
+
+// ---------- 使用记录 ----------
+function fillHistoryCredOptions(list) {
+  const sel = $('hist-cred');
+  if (!sel) return;
+  const cur = sel.value;
+  const opts = ['<option value="">全部账号</option>'].concat(
+    (list || []).map(t => {
+      const m = t.meta || {};
+      const label = m.email || m.name || t.token_masked;
+      return `<option value="${esc(t.id)}">${esc(label)}</option>`;
+    })
+  );
+  sel.innerHTML = opts.join('');
+  sel.value = cur;
+}
+async function loadHistory() {
+  const wrap = $('hist-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    if (!tokenCache.length) { try { const r = await api('/api/tokens'); tokenCache = r.tokens || []; fillHistoryCredOptions(tokenCache); } catch (e) {} }
+    const cred = $('hist-cred') ? $('hist-cred').value : '';
+    const q = '/api/account/history?limit=100' + (cred ? '&cred_id=' + encodeURIComponent(cred) : '');
+    const d = await api(q);
+    const rows = d.records || [];
+    wrap.innerHTML = rows.length ? `<table><thead><tr>
+        <th>时间</th><th>账号</th><th>套餐</th><th>今日剩余</th><th>已用</th><th>近 7 天 token</th><th>连续天数</th><th>结果</th>
+      </tr></thead><tbody>${
+      rows.map(r => `<tr>
+        <td style="font-size:12px">${new Date(r.ts).toLocaleString('zh-CN', { hour12: false })}</td>
+        <td>${esc(r.email || r.name || r.cred_id.slice(0, 8))}</td>
+        <td>${esc(r.tier_id || '免费')}</td>
+        <td>${r.daily_remaining ?? '—'} / ${r.daily_limit ?? '—'}</td>
+        <td>${r.daily_spent ?? '—'}</td>
+        <td>${r.tokens_7d != null ? r.tokens_7d.toLocaleString() : '—'}</td>
+        <td>${r.streak_current ?? '—'}</td>
+        <td>${r.ok ? badge('成功', 'ok') : badge('失败', 'err')}</td>
+      </tr>`).join('')}</tbody></table>` : '<div class="empty">暂无记录 — 点「刷新账号全貌」或凭证行的「检查」即可产生记录</div>';
+  } catch (e) { wrap.innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; }
+}
+
+// ---------- 账号全貌（中文呈现上游数据） ----------
+async function refreshAccountOverview() {
+  $('overview-wrap').innerHTML = '<div class="empty">拉取中…（上游可能需要几秒）</div>';
+  try {
+    const d = await api('/api/account/overview');
+    $('overview-wrap').innerHTML = renderOverview(d);
+  } catch (e) {
+    const m = String(e.message || '');
+    $('overview-wrap').innerHTML = `<div class="empty">拉取失败：${esc(m)}${m.includes('Cookie') ? ' — 请先在上方导入凭证' : ''}</div>`;
+  }
+}
+function renderOverview(d) {
+  const id = (d.identity && d.identity.user) || {};
+  let html = '';
+  // 身份
+  html += '<div class="row" style="gap:12px;margin-bottom:14px">';
+  if (id.image) html += `<img src="${esc(id.image)}" style="width:44px;height:44px;border-radius:50%" onerror="this.style.display='none'">`;
+  html += `<div><div style="font-size:16px;font-weight:600">${esc(id.name || '未命名账号')}</div>
+    <div style="font-size:12px;color:var(--muted)">${esc(id.email || '')}${id.id ? ' · 用户 ID ' + esc(String(id.id).slice(0, 8)) + '…' : ''}</div></div>`;
+  if (d.identity && d.identity.expires) html += `<span style="flex:1"></span><span style="font-size:12px;color:var(--muted)">凭证有效期至 ${new Date(d.identity.expires).toLocaleString('zh-CN', { hour12: false })}</span>`;
+  html += '</div>';
+
+  // 使用统计（中文）
+  const u = d.usage || {};
+  if (u.streak || u.recent) {
+    html += '<div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:4px"><b style="font-size:14px">📊 使用统计</b></div>';
+    if (u.streak) html += `<p style="font-size:13px;margin-top:6px">🔥 连续使用 <b class="tok">${u.streak.current ?? 0}</b> 天（最长 ${u.streak.longest ?? 0} 天） · 累计活跃 <b>${u.allTimeActiveDays ?? 0}</b> 天</p>`;
+    const r = u.recent || {};
+    if (r.totalTokens != null) html += `<p style="font-size:13px;color:var(--muted);margin-top:4px">近 ${r.days ?? 7} 天：<b>${r.messages ?? 0}</b> 条消息 · 输入 <b>${(r.inputTokens || 0).toLocaleString()}</b> · 输出 <b>${(r.outputTokens || 0).toLocaleString()}</b> · 缓存 <b>${(r.cacheReadTokens || 0).toLocaleString()}</b> · 合计 <b>${(r.totalTokens || 0).toLocaleString()}</b> tokens</p>`;
+    if ((u.sessionsByModel || []).length) {
+      html += `<table style="margin-top:8px"><thead><tr><th>模型</th><th>会话数</th><th>消耗单位</th></tr></thead><tbody>${u.sessionsByModel.map(m => `<tr><td>${esc(m.model)}</td><td>${m.sessions}</td><td>${m.units}</td></tr>`).join('')}</tbody></table>`;
+    }
+  }
+
+  // 今日额度
+  const q = d.quota || {};
+  const fb = q.freebucks || {};
+  const daily = fb.daily || {};
+  const tierId = (d.subscription && d.subscription.subscription && d.subscription.subscription.tierId) || null;
+  html += '<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px"><b style="font-size:14px">💰 今日额度</b></div>';
+  html += `<p style="font-size:13px;margin-top:6px">账号层级 <b>${esc(q.accessTier || '—')}</b> · 订阅套餐 <b>${esc(tierId || '免费')}</b></p>`;
+  if (daily.limit != null) {
+    const pct = daily.limit > 0 ? Math.round(((daily.remaining || 0) / daily.limit) * 100) : 0;
+    const reset = daily.resetAt ? new Date(daily.resetAt).toLocaleString('zh-CN', { hour12: false }) : '—';
+    html += `<p style="font-size:13px;margin-top:4px">积分：剩余 <b class="tok">${daily.remaining ?? '—'}</b> / ${daily.limit ?? '—'}（已用 ${daily.spent ?? 0}） · 重置 <b>${reset}</b> <span style="color:var(--muted)">（太平洋时间午夜，隔天自动刷新）</span></p>`;
+    html += `<div style="height:8px;background:#21262d;border-radius:4px;overflow:hidden;margin:8px 0 10px"><div style="height:100%;width:${pct}%;background:${pct > 50 ? 'var(--ok)' : pct > 20 ? 'var(--warn)' : 'var(--err)'}"></div></div>`;
+  }
+  const prices = fb.prices || {};
+  const rl = q.rateLimitsByModel || {};
+  const models = Object.keys(rl);
+  if (models.length) {
+    html += `<table><thead><tr><th>模型</th><th>今日剩余次数</th><th>限额</th><th>已用</th><th>积分价</th><th>下次重置</th></tr></thead><tbody>${
+      models.map(m => {
+        const v = rl[m] || {};
+        const remain = v.limit != null ? Math.max(0, (v.limit || 0) - (v.recentCount || 0)) : '—';
+        const price = prices[m] != null ? (prices[m] === 0 ? '<b class="tok">免费</b>' : prices[m]) : '—';
+        const reset = v.resetAt ? new Date(v.resetAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+        const pool = v.poolLabel ? ` <span style="color:var(--muted);font-size:11px">${esc(v.poolLabel)}</span>` : '';
+        return `<tr><td>${esc(m)}${pool}</td><td><b>${remain}</b></td><td>${v.limit ?? '—'}</td><td>${v.recentCount ?? 0}</td><td>${price}</td><td style="font-size:12px">${reset}</td></tr>`;
+      }).join('')}</tbody></table>`;
+  }
+  const extra = Object.entries(prices).filter(([m]) => !rl[m]);
+  if (extra.length) {
+    html += `<details style="margin-top:8px"><summary>其他模型积分价（${extra.length}）</summary><div style="margin-top:6px">${extra.map(([m, p]) => `<span class="chip">${esc(m)}: ${p === 0 ? '免费' : p}</span>`).join('')}</div></details>`;
+  }
+
+  // 凭证与刷新时间
+  const c = d.credential || {};
+  html += `<div style="font-size:12px;color:var(--muted);margin-top:12px;border-top:1px solid var(--border);padding-top:8px">当前凭证 ${esc(c.token_masked || '')} · 来源 ${esc(c.source || '')}${c.added_at ? ' · 入库 ' + new Date(c.added_at).toLocaleString('zh-CN', { hour12: false }) : ''} · 数据更新于 ${d.fetched_at ? new Date(d.fetched_at).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}</div>`;
+  return html;
+}
+async function refreshCredential() {
+  toast('正在做凭证保活检查…');
+  try {
+    const r = await api('/api/account/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    toast(r.message || (r.ok ? '凭证有效' : '凭证可能已失效'), 7000);
+    if (r.ok) refreshAccountOverview();
+  } catch (e) { toast('检查失败：' + e.message, 6000); }
 }
 
 // ---------- 技能 ----------
@@ -624,9 +1141,16 @@ async function refreshDoctor() {
 
 // ---------- 启动 ----------
 refreshOverview();
+loadGuide();
+// 扩展可能在页面加载后才被激活，启动后多探几次（最多 5 次，探测到即停）
+renderExtStatus();
+(() => {
+  let tries = 0;
+  const t = setInterval(() => { pingExtension(); if (++tries >= 5 || extId) clearInterval(t); }, 2000);
+})();
 // hash 路由：托盘「系统体检」→ /#doctor
 if (location.hash === '#doctor') showTab('doctor');
-setInterval(() => { if ($('tab-overview').style.display !== 'none') refreshOverview(); }, 6000);
+startOverviewTimer();
 </script>
 </body>
 </html>"##;

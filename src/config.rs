@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
+use std::str::FromStr;
 use std::time::Duration;
 
 /// 全局配置，JSON 文件 + 环境变量双来源（环境变量优先）
@@ -38,6 +39,18 @@ pub struct Config {
     pub telemetry_path: String,
     /// 记忆库 SQLite 路径（用户偏好/纠正；独立库）
     pub memory_path: String,
+    /// 上游会话记录（web 协议 threadId；供自动清理）
+    pub threads_path: String,
+    /// 凭证账号信息缓存（昵称/邮箱/套餐/今日剩余，面板凭证列表用）
+    pub cred_meta_path: String,
+    /// 账号使用记录（JSONL，按凭证可查历史）
+    pub account_history_path: String,
+    /// 上游会话自动清理间隔（秒）；0 = 关闭自动清理
+    pub thread_cleanup_interval_sec: u64,
+    /// 上游会话保留时长（小时），超过即清理
+    pub thread_max_age_hours: u64,
+    /// web 协议桥接的会话绑定（OpenAI/Anthropic 客户端 → 上游 thread 复用）
+    pub web_threads_path: String,
     /// 记忆层开关（false 时既不自动记录也不注入；隐私敏感用户可关）
     pub memory_enabled: bool,
     /// 技能目录（技能文件真相源）
@@ -70,6 +83,13 @@ impl Default for Config {
             tokens_path: "data/tokens.json".into(),
             telemetry_path: "data/telemetry.sqlite".into(),
             memory_path: "data/memory.sqlite".into(),
+            threads_path: "data/threads.json".into(),
+            cred_meta_path: "data/cred_meta.json".into(),
+            account_history_path: "data/account_history.jsonl".into(),
+            // 用户批注（网页对话.txt:605）：反代要自己清理上游会话，别把压力留给上游被查出来
+            thread_cleanup_interval_sec: 3600,
+            thread_max_age_hours: 24,
+            web_threads_path: "data/web_threads.json".into(),
             memory_enabled: true,
             skills_dir: "data/skills".into(),
             skills_inject_mode: "roster".into(),
@@ -144,6 +164,23 @@ impl Config {
         if let Ok(v) = env::var("MEMORY_PATH") {
             self.memory_path = v;
         }
+        if let Ok(v) = env::var("CRED_META_PATH") {
+            self.cred_meta_path = v;
+        }
+        if let Ok(v) = env::var("ACCOUNT_HISTORY_PATH") {
+            self.account_history_path = v;
+        }
+        if let Ok(v) = env::var("THREAD_CLEANUP_INTERVAL") {
+            self.thread_cleanup_interval_sec = parse_duration_sec(&v).unwrap_or(self.thread_cleanup_interval_sec);
+        }
+        if let Ok(v) = env::var("THREAD_MAX_AGE_HOURS") {
+            if let Ok(n) = v.parse() {
+                self.thread_max_age_hours = n;
+            }
+        }
+        if let Ok(v) = env::var("WEB_THREADS_PATH") {
+            self.web_threads_path = v;
+        }
         if let Ok(v) = env::var("SKILLS_DIR") {
             self.skills_dir = v;
         }
@@ -171,10 +208,7 @@ impl Config {
             return Err(anyhow!("LISTEN_ADDR 不能为空"));
         }
         // 安全守卫：监听非本机地址时必须配置 api_keys（否则管理端点/记忆/凭证对网络裸奔）
-        let is_loopback = self.listen_addr.starts_with("127.0.0.1")
-            || self.listen_addr.starts_with("localhost")
-            || self.listen_addr.starts_with("[::1]");
-        if !is_loopback && self.api_keys.is_empty() {
+        if !is_loopback_listen(&self.listen_addr) && self.api_keys.is_empty() {
             return Err(anyhow!(
                 "安全拒绝：listen_addr={} 不是本机地址，但未配置 api_keys。\
                  请配置 api_keys（推荐）或改回 127.0.0.1",
@@ -193,6 +227,43 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// 判断监听地址是否为本机（host 部分精确匹配，防 `localhost.evil.com` 这类前缀绕过）。
+pub fn is_loopback_listen(listen_addr: &str) -> bool {
+    // host[:port] → host；[::1]:port → ::1
+    let host = if let Some(rest) = listen_addr.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("").to_string()
+    } else {
+        listen_addr
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(listen_addr)
+            .to_string()
+    };
+    matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]")
+        || std::net::IpAddr::from_str(&host).map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
+/// 解析配置文件路径：`--config x.json` > 第一个位置参数 > 当前目录 config.json > None
+///
+/// 与启动时 `Config::load` 的取舍保持一致，供"运行时写回配置"（如面板一键生成 API Key）复用。
+pub fn resolve_config_path() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--config") {
+        if let Some(p) = args.get(i + 1) {
+            return Some(p.clone());
+        }
+    }
+    if let Some(a) = args.get(1) {
+        if !a.starts_with("--") {
+            return Some(a.clone());
+        }
+    }
+    if std::path::Path::new("config.json").exists() {
+        return Some("config.json".into());
+    }
+    None
 }
 
 /// 解析 "6h" / "900s" / "15m" 或纯秒数

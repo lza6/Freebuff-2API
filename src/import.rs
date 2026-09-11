@@ -22,6 +22,9 @@ pub struct ExtractedAuth {
     pub path: String,
     /// 关联请求的方法
     pub method: String,
+    /// 入库时间（RFC3339；旧数据无此字段时为 None）
+    #[serde(default)]
+    pub added_at: Option<String>,
 }
 
 /// 从 curl 命令文本提取 Bearer token（仅限 freebuff/codebuff 目标域，防跨域凭据误导入）
@@ -59,6 +62,7 @@ pub fn parse_curl(text: &str) -> Vec<ExtractedAuth> {
             host: host.clone(),
             path: path.clone(),
             method: method.clone(),
+            added_at: None, // persist 时补写入库时间
         });
     }
     out
@@ -122,6 +126,7 @@ pub fn parse_har(json_text: &str) -> Result<Vec<ExtractedAuth>> {
                             host: parse_host(&entry.request.url),
                             path: parse_path(&entry.request.url),
                             method: entry.request.method.clone(),
+                            added_at: None,
                         });
                     }
                 }
@@ -129,6 +134,31 @@ pub fn parse_har(json_text: &str) -> Result<Vec<ExtractedAuth>> {
         }
     }
     Ok(out)
+}
+
+/// 凭证稳定标识：FNV-1a 64 位（纯本地计算，零依赖，跨 Rust 版本结果稳定）。
+///
+/// 不用 `DefaultHasher`——其输出 Rust 文档明确不保证跨版本/跨进程稳定，
+/// 而该 id 要落盘作为凭证的持久主键，必须可重现。
+pub fn cred_id(token: &str) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET;
+    for b in token.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    // 混入长度，进一步降低不同长度同哈希的碰撞概率
+    format!("{:016x}{:04x}", h, token.len().min(0xffff))
+}
+
+/// 凭证类型：web 版 Cookie 还是 Bearer token。
+pub fn kind_of(token: &str) -> &'static str {
+    if token.contains("session-token") {
+        "web-cookie"
+    } else {
+        "bearer"
+    }
 }
 
 fn parse_host(url: &str) -> String {
@@ -142,21 +172,48 @@ fn parse_path(url: &str) -> String {
     rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_default()
 }
 
+/// 凭证文件写锁：persist/delete/heal 都是"读-改-写整文件"，
+/// 并发时会互相覆盖（后写赢、先写丢），必须串行化。进程内锁足够（单进程软件）。
+static TOKENS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 原子写：先写临时文件再 rename，避免写入中途崩溃留下截断的 tokens.json
+/// （截断 = load_tokens 解析失败 = 全部凭证不可用）。
+fn atomic_write(path: &str, json: &str) -> Result<()> {
+    let p = std::path::Path::new(path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    // rename 覆盖已有目标在 Windows 上要求目标不存在，先移除
+    #[cfg(windows)]
+    if p.exists() {
+        let _ = std::fs::remove_file(p);
+    }
+    std::fs::rename(&tmp, p)?;
+    Ok(())
+}
+
 /// 持久化：追加到 data/tokens.json（dedupe）
 pub fn persist_tokens(path: &str, new_tokens: &[ExtractedAuth]) -> Result<Vec<ExtractedAuth>> {
+    let _g = TOKENS_LOCK.lock().map_err(|_| anyhow::anyhow!("tokens 锁中毒"))?;
     let existing = load_tokens(path)?;
     let mut all: Vec<ExtractedAuth> = existing;
     let existing_set: HashSet<String> = all.iter().map(|t| t.token.clone()).collect();
+    let now = chrono::Utc::now().to_rfc3339();
     let mut added = Vec::new();
     for t in new_tokens {
         if !existing_set.contains(&t.token) {
-            all.push(t.clone());
-            added.push(t.clone());
+            let mut item = t.clone();
+            if item.added_at.is_none() {
+                item.added_at = Some(now.clone());
+            }
+            all.push(item.clone());
+            added.push(item);
         }
     }
-    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."))).ok();
     let json = serde_json::to_string_pretty(&all)?;
-    std::fs::write(path, json)?;
+    atomic_write(path, &json)?;
     Ok(added)
 }
 
@@ -168,6 +225,51 @@ pub fn load_tokens(path: &str) -> Result<Vec<ExtractedAuth>> {
     let text = std::fs::read_to_string(path)?;
     let parsed: Vec<ExtractedAuth> = serde_json::from_str(&text)?;
     Ok(parsed)
+}
+
+/// 读取 token 并**修复历史数据**：早于 `added_at` 字段引入的凭证没有入库时间，
+/// 面板上只能显示"—"，用户看不到"什么时候入的"。这里用文件修改时间回填并落盘（幂等）。
+pub fn load_tokens_healed(path: &str) -> Result<Vec<ExtractedAuth>> {
+    let mut tokens = load_tokens(path)?;
+    if tokens.iter().all(|t| t.added_at.is_some()) {
+        return Ok(tokens);
+    }
+    // 回填来源：文件 mtime（最接近"首次入库"的可信时间）；取不到则用当前时间。
+    // 注意：多条历史凭证会得到同一个回填值（≈ 最后一次文件修改时间），这是可接受的下限保证。
+    let fallback = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339());
+    let mut changed = false;
+    for t in tokens.iter_mut() {
+        if t.added_at.is_none() {
+            t.added_at = Some(fallback.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        let json = serde_json::to_string_pretty(&tokens)?;
+        let _g = TOKENS_LOCK.lock().map_err(|_| anyhow::anyhow!("tokens 锁中毒"))?;
+        atomic_write(path, &json)?;
+        tracing::info!("已为历史凭证回填入库时间（来源：tokens.json mtime）");
+    }
+    Ok(tokens)
+}
+
+/// 按稳定 id 删除一条凭证；返回是否删除成功。
+pub fn delete_token(path: &str, id: &str) -> Result<Option<ExtractedAuth>> {
+    let _g = TOKENS_LOCK.lock().map_err(|_| anyhow::anyhow!("tokens 锁中毒"))?;
+    let mut tokens = load_tokens(path)?;
+    let before = tokens.len();
+    let removed = tokens.iter().find(|t| cred_id(&t.token) == id).cloned();
+    tokens.retain(|t| cred_id(&t.token) != id);
+    if tokens.len() == before {
+        return Ok(None);
+    }
+    let json = serde_json::to_string_pretty(&tokens)?;
+    atomic_write(path, &json)?;
+    Ok(removed)
 }
 
 /// 从任意文本自动嗅探：优先按 curl，再按 HAR，再按 Cookie 串，最后按裸 "Bearer xxx"
@@ -203,6 +305,7 @@ pub fn sniff_tokens(text: &str) -> Result<Vec<ExtractedAuth>> {
                 host: String::new(),
                 path: String::new(),
                 method: String::new(),
+                added_at: None,
             });
         }
     }
@@ -237,6 +340,7 @@ pub fn parse_cookie(text: &str) -> Option<Vec<ExtractedAuth>> {
         host: "freebuff.com".into(),
         path: "/api/web/freebuff-session".into(),
         method: "GET".into(),
+        added_at: None,
     }])
 }
 
@@ -299,8 +403,8 @@ curl --url "https://www.codebuff.com/api/v1/freebuff/session" \
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tokens.json");
         let path_str = path.to_str().unwrap().to_string();
-        let t1 = ExtractedAuth { token: "t1".into(), source: "test".into(), host: "h".into(), path: "p".into(), method: "GET".into() };
-        let t2 = ExtractedAuth { token: "t2".into(), source: "test".into(), host: "h".into(), path: "p".into(), method: "GET".into() };
+        let t1 = ExtractedAuth { token: "t1".into(), source: "test".into(), host: "h".into(), path: "p".into(), method: "GET".into(), added_at: None };
+        let t2 = ExtractedAuth { token: "t2".into(), source: "test".into(), host: "h".into(), path: "p".into(), method: "GET".into(), added_at: None };
         let added1 = persist_tokens(&path_str, &[t1.clone(), t2.clone()]).unwrap();
         assert_eq!(added1.len(), 2);
         // 再次写入含 t1 应跳过
@@ -360,5 +464,73 @@ curl --url "https://evil.example.com/api/steal" \
 }"#;
         let out = parse_har(har).unwrap();
         assert!(out.is_empty(), "跨域 HAR token 应被拒绝");
+    }
+
+    #[test]
+    fn cred_id_is_stable_and_distinct() {
+        // 同一 token 必须每次得到同一 id（id 是落盘主键，不稳定会导致凭证列表错乱）
+        let a1 = cred_id("__Secure-next-auth.session-token=abc");
+        let a2 = cred_id("__Secure-next-auth.session-token=abc");
+        assert_eq!(a1, a2);
+        assert_ne!(a1, cred_id("__Secure-next-auth.session-token=abd"));
+        // 长度不同但前缀相同也必须区分
+        assert_ne!(cred_id("tok"), cred_id("tokx"));
+    }
+
+    #[test]
+    fn kind_detects_web_cookie() {
+        assert_eq!(kind_of("__Secure-next-auth.session-token=x; y=1"), "web-cookie");
+        assert_eq!(kind_of("sk-abcdef"), "bearer");
+    }
+
+    #[test]
+    fn healed_load_backfills_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let path_str = path.to_str().unwrap().to_string();
+        // 模拟早期版本落盘的数据：没有 added_at 字段
+        std::fs::write(
+            &path,
+            r#"[{"token":"legacy-token","source":"cookie","host":"freebuff.com","path":"/p","method":"GET"}]"#,
+        )
+        .unwrap();
+
+        let healed = load_tokens_healed(&path_str).unwrap();
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].added_at.is_some(), "历史凭证必须被回填入库时间");
+        // 已落盘（再次读取不再需要回填，且值保持稳定）
+        let again = load_tokens_healed(&path_str).unwrap();
+        assert_eq!(again[0].added_at, healed[0].added_at);
+    }
+
+    #[test]
+    fn healed_load_is_noop_when_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let path_str = path.to_str().unwrap().to_string();
+        let raw = r#"[{"token":"t","source":"cookie","host":"h","path":"p","method":"GET","added_at":"2026-01-01T00:00:00+00:00"}]"#;
+        std::fs::write(&path, raw).unwrap();
+        let out = load_tokens_healed(&path_str).unwrap();
+        assert_eq!(out[0].added_at.as_deref(), Some("2026-01-01T00:00:00+00:00"));
+        // 文件内容不应被改写
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
+    }
+
+    #[test]
+    fn delete_token_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let path_str = path.to_str().unwrap().to_string();
+        let t1 = ExtractedAuth { token: "del-me".into(), source: "cookie".into(), host: "h".into(), path: "p".into(), method: "GET".into(), added_at: None };
+        let t2 = ExtractedAuth { token: "keep-me".into(), source: "cookie".into(), host: "h".into(), path: "p".into(), method: "GET".into(), added_at: None };
+        persist_tokens(&path_str, &[t1, t2]).unwrap();
+
+        let removed = delete_token(&path_str, &cred_id("del-me")).unwrap();
+        assert!(removed.is_some(), "应按 id 删除成功");
+        let left = load_tokens(&path_str).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].token, "keep-me");
+        // 再删同一条 → None（幂等）
+        assert!(delete_token(&path_str, &cred_id("del-me")).unwrap().is_none());
     }
 }

@@ -1,7 +1,7 @@
 {
   "name": "freebuff2api-desktop",
   "productName": "Freebuff2API",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Freebuff2API 桌面启动器（内嵌网关 + 控制台）",
   "main": "main.js",
   "private": true,

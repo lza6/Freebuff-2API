@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Freebuff2API 扩展设置</title>
+<style>
+  body { font-family: system-ui, 'Segoe UI', 'Microsoft YaHei', sans-serif; max-width: 460px; margin: 40px auto; padding: 0 16px; color: #e6edf3; background: #0d1117; }
+  h2 { font-size: 18px; }
+  p { color: #8b949e; font-size: 13px; line-height: 1.9; }
+  ol { color: #8b949e; font-size: 13px; line-height: 1.9; padding-left: 20px; }
+  input { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #e6edf3; font-size: 14px; box-sizing: border-box; }
+  button { margin-top: 12px; padding: 8px 16px; border-radius: 6px; border: none; background: #2f81f7; color: #fff; cursor: pointer; font-size: 14px; }
+  button.ghost { background: #21262d; color: #e6edf3; margin-left: 8px; }
+  code { background: #161b22; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  #msg { color: #3fb950; min-height: 20px; }
+</style>
+</head>
+<body>
+  <h2>Freebuff2API 扩展设置</h2>
+  <p><b>网关端口</b>。留空则按默认顺序自动探测：<code>47821 → 47822 → 8787</code>。</p>
+  <p>优先级：<b>网关面板传入的端口</b> &gt; <b>这里设置的端口</b> &gt; <b>默认列表</b>。面板「一键登录」会自动带上自己的端口，通常无需在此填写。</p>
+  <input id="port" type="number" placeholder="47821（留空 = 自动探测）" min="1" max="65535">
+  <p style="margin-top:16px"><b>网关 API Key</b>（可选）。<b>网关未配置 <code>api_keys</code> 时留空即可</b>；若面板提示 401（网关已启用 API Key 校验），把面板显示的 Key 填到这里。</p>
+  <p>兼容旧版网关：留空时不发送 <code>Authorization</code> 头，本机直连照常可用。</p>
+  <input id="apiKey" type="password" autocomplete="off" placeholder="留空 = 不发送 Authorization 头">
+  <button id="save">保存</button>
+  <button id="reset" class="ghost">清空两项</button>
+  <p id="msg"></p>
+  <p>验证是否生效：在网关面板点「🔑 一键登录」，或直接点扩展图标 —— 通知栏会显示结果与所用端口。</p>
+  <script src="options.js"></script>
+</body>
+</html>

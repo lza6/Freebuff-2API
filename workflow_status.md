@@ -18,6 +18,10 @@
 
 **Phase I 执行记录（2026-09-11）**：首跑 15/18（第 4 节 3 失败 = **测试脚本自身 bug**——`json()` helper 双重包装 body 导致网关收到 `{body:{...}}`，model 字段为空；非产品缺陷）。修正脚本后重跑 **18/18 全过**，并回归 phase_g 46/46 + 单测 213 全绿。真实消耗上游额度（多轮真实对话 + 2 次联网搜索）。
 
+## Next Gate
+
+- **Phase H + Phase I 已完结**：v0.6.0 已发布（commit 1435a8f）。剩余 backlog：桥接错误检测点前移（StreamEncoder 旁路）、SSE 攒批提交、web 版 agent-runs/stream、web 版广告链、扩展真实浏览器人工验证。
+
 ## 明确不做（记录理由）
 
 - **web 版 agent-runs/stream（项目页构建模式）**：属新协议面（web 项目页），当前产品形态（对话网关）不覆盖，需先做协议逆向验证；记入 backlog。

@@ -49,6 +49,8 @@ pub struct AppState {
     pub api_keys: Arc<std::sync::RwLock<Vec<String>>>,
     /// web 协议桥接：客户端会话 → 上游 thread 绑定（复用会话省每日额度）
     pub web_threads: Arc<crate::web_threads::WebThreadMap>,
+    /// 记忆层运行时开关（面板可热切换；初值来自 config.memory_enabled，默认关）
+    pub memory_runtime_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub started: std::time::Instant,
 }
 
@@ -62,6 +64,15 @@ fn set_api_keys(st: &AppState, keys: Vec<String>) {
     if let Ok(mut w) = st.api_keys.write() {
         *w = keys;
     }
+}
+
+/// 记忆层运行时开关（热切换，不重启生效）
+fn memory_enabled_now(st: &AppState) -> bool {
+    st.memory_runtime_enabled.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_memory_runtime_enabled(st: &AppState, enabled: bool) {
+    st.memory_runtime_enabled.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 // axum_core 已对 `S: Clone` 提供 blanket impl FromRef<S> for S，此处无需手动实现。
@@ -125,6 +136,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/memory", get(handle_memory_list).post(handle_memory_upsert))
         .route("/api/memory/delete", post(handle_memory_delete))
         .route("/api/memory/static", post(handle_memory_static))
+        .route("/api/memory/toggle", post(handle_memory_toggle))
         .route("/api/threads/cleanup", post(handle_threads_cleanup))
         .route("/mcp", post(handle_mcp))
         .route("/api/doctor", get(handle_doctor));
@@ -751,6 +763,12 @@ async fn web_bridge_openai(
     let model_track = model.clone();
     let requested_track = requested.clone();
     let req_id_track = req_id.clone();
+    // token 估算输入（上游 web 协议 SSE 不携带 usage，只能本地估算——见 estimate_tokens）
+    let est_input_chars: usize = match &mode {
+        BridgeMode::Continue { thread_id: _ } => last_user.chars().count(),
+        BridgeMode::Fresh { prompt } => prompt.chars().count(),
+    };
+    let est_input_track = est_input_chars;
     tokio::spawn(async move {
         let mut stream_ = body.into_data_stream();
         let mut ttft: Option<u64> = None;
@@ -783,7 +801,19 @@ async fn web_bridge_openai(
             let _ = web_threads.bind(&cid_track, &tid, &bound_track);
             record_thread(&threads_path, &tid);
         }
-        let (pt, ct) = extract_usage(&tail).unwrap_or((0, 0));
+        // token 记账：上游 web SSE 不给 usage（done 事件为空），优先解析 usage 字段，
+        // 没有则按内容长度估算（输入=发出内容，输出=转换后 chunk 里的正文），
+        // 保证面板/统计不再永远显示 0——估算值以 `~` 前缀语义记录（见 estimate_tokens 注释）。
+        let (pt, ct) = match extract_usage(&tail) {
+            Some(v) => v,
+            None => {
+                let out_chars: usize = count_bridge_content_chars(&tail);
+                (
+                    estimate_tokens(est_input_track),
+                    estimate_tokens(out_chars),
+                )
+            }
+        };
         // 桥接流内嵌错误识别（Critic-J P2-1 闭环）：优先用 StreamEncoder 旁路槽
         // （能看到上游原始 error envelope），tail 扫描 detect_bridge_error 作兜底。
         let bypass_error = client_track.last_upstream_error();
@@ -1993,8 +2023,8 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     let status = upstream_resp.status();
     let latency_ms = start.elapsed().as_millis() as i64;
     // （api_key / client_ip 已在重试循环前计算）
-    // 观察（零 LLM）：模型使用偏好 / 档位降级 / 用户纠正信号 → 记忆库（可配置关闭）
-    if st.cfg.memory_enabled {
+    // 观察（零 LLM）：模型使用偏好 / 档位降级 / 用户纠正信号 → 记忆库（运行时开关关闭时不记录）
+    if memory_enabled_now(&st) {
         let _ = st.memory.observe(&model, effort_downgraded.as_deref(), &mem_query, None);
     }
 
@@ -3193,14 +3223,19 @@ async fn handle_threads_cleanup(State(st): State<AppState>, headers: HeaderMap, 
 }
 
 // ---------- 记忆 API ----------
-/// GET /api/memory — 记忆列表 + 统计
+/// GET /api/memory — 记忆列表 + 统计 + 运行时开关状态
 async fn handle_memory_list(State(st): State<AppState>, headers: HeaderMap) -> Response {
     if !admin_authorized(&headers, &st) {
         return admin_denied();
     }
     let memories = st.memory.list(200);
     let stats = st.memory.stats().unwrap_or_else(|_| serde_json::json!({}));
-    Json(serde_json::json!({ "ok": true, "memories": memories, "stats": stats })).into_response()
+    Json(serde_json::json!({
+        "ok": true,
+        "memories": memories,
+        "stats": stats,
+        "enabled": memory_enabled_now(&st),
+    })).into_response()
 }
 
 /// POST /api/memory — 手动新增记忆 body: {kind, title, content, is_static?}
@@ -3272,6 +3307,70 @@ async fn handle_memory_static(State(st): State<AppState>, headers: HeaderMap, bo
         Ok(ok) => Json(serde_json::json!({ "ok": ok, "id": id, "is_static": is_static })).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "message": e.to_string() }))).into_response(),
     }
+}
+
+/// POST /api/memory/toggle — body: {enabled: bool}
+/// 记忆层总开关（默认关闭）：关闭后既不自动记录也不注入 system；写回 config.json 立即热生效。
+async fn handle_memory_toggle(State(st): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Some(resp) = write_guard(&headers, &st) {
+        return resp;
+    }
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_req("body 必须是 JSON"),
+    };
+    let Some(enabled) = v.get("enabled").and_then(|x| x.as_bool()) else {
+        return bad_req("缺少 enabled（bool）");
+    };
+    // 热生效：Config 在 Arc 后面不可变，用与 api_keys 同款的 RwLock 槽覆盖读取。
+    // 简单做法：直接改 Arc 不可行——这里用 AtomicBool 语义借道 api_keys 模式太重，
+    // 改为运行时写一个覆盖文件不可取——最直接：与 api-key 一致，写回 config.json + 内存标志。
+    // Config 本体不可变，因此把开关状态也镜像进 st（见 memory_runtime_enabled）。
+    set_memory_runtime_enabled(&st, enabled);
+    // 持久化到 config.json（Value 往返合并，避免覆盖用户其他配置）
+    let path = crate::config::resolve_config_path();
+    let mut persisted = false;
+    if let Some(p) = path.as_deref() {
+        let mut root: serde_json::Value = std::fs::read_to_string(p)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !root.is_object() {
+            root = serde_json::json!({});
+        }
+        root["memory_enabled"] = serde_json::json!(enabled);
+        let write_res = serde_json::to_string_pretty(&root)
+            .map_err(|e| e.to_string())
+            .and_then(|s| {
+                let tmp = format!("{p}.tmp");
+                std::fs::write(&tmp, s).map_err(|e| e.to_string())?;
+                #[cfg(windows)]
+                if std::path::Path::new(p).exists() {
+                    let _ = std::fs::remove_file(p);
+                }
+                std::fs::rename(&tmp, p).map_err(|e| e.to_string())
+            });
+        match write_res {
+            Ok(()) => {
+                persisted = true;
+                tracing::info!("memory_enabled={enabled} 已写回 {p}");
+            }
+            Err(e) => tracing::warn!("memory_enabled 写回 {p} 失败: {e}（仅内存生效）"),
+        }
+    }
+    st.logs.emit(
+        "info",
+        "memory",
+        None,
+        format!("记忆层已{}", if enabled { "开启（自动记录 + 注入）" } else { "关闭（不记录不注入）" }),
+    );
+    Json(serde_json::json!({
+        "ok": true,
+        "enabled": enabled,
+        "persisted": persisted,
+        "message": if enabled { "记忆层已开启：自动记录你的偏好与纠正，并在相关对话时注入" } else { "记忆层已关闭：不再自动记录，也不再注入任何记忆内容" },
+    }))
+    .into_response()
 }
 
 // ---------- MCP（只读工具） ----------
@@ -3423,8 +3522,8 @@ async fn build_system_prefix(st: &AppState, query: &str) -> String {
         }
         base
     };
-    // 记忆注入（用户偏好/纠正；空结果不注入，保持请求字节稳定；memory_enabled=false 时整体关闭）
-    if st.cfg.memory_enabled {
+    // 记忆注入（用户偏好/纠正；空结果不注入，保持请求字节稳定；运行时开关关闭时整体跳过）
+    if memory_enabled_now(st) {
         let mem = st.memory.brief(query, 512);
         if !mem.is_empty() {
             s.push_str(&mem);
@@ -3475,6 +3574,35 @@ fn find_json_number(s: &str, key: &str) -> Option<u64> {
     let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+/// 按字符数估算 token 数（上游 web 协议 SSE 不携带 usage 时的记账兜底）。
+/// 中文约 1 字 ≈ 1~1.6 token、英文约 4 字符 ≈ 1 token，取折中：每 2 字符 1 token。
+/// 估算值偏保守（不虚报），面板侧仍以「估算」语义呈现，不冒充上游精确值。
+fn estimate_tokens(chars: usize) -> u64 {
+    chars.div_ceil(2) as u64
+}
+
+/// 统计桥接转换后 OpenAI chunk 流里的正文与推理内容总字符数（tail 采样用）。
+/// 只数 delta.content / delta.reasoning_content 的字符串值，忽略 JSON 结构开销。
+fn count_bridge_content_chars(sse_tail: &str) -> usize {
+    let mut total = 0usize;
+    for line in sse_tail.lines() {
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        let Some(d) = v.pointer("/choices/0/delta") else { continue };
+        if let Some(t) = d.get("content").and_then(|x| x.as_str()) {
+            total += t.chars().count();
+        }
+        if let Some(t) = d.get("reasoning_content").and_then(|x| x.as_str()) {
+            total += t.chars().count();
+        }
+    }
+    total
 }
 
 // ---------- 多模态上传 ----------

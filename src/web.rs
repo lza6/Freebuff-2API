@@ -21,6 +21,13 @@ header { display:flex; align-items:center; justify-content:space-between; paddin
 header h1 { font-size:17px; font-weight:600; }
 header .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:8px; vertical-align:middle; }
 header .dot.ok { background:var(--ok); } header .dot.err { background:var(--err); }
+/* 记忆层总开关（toggle switch） */
+.switch { position:relative; display:inline-block; width:42px; height:24px; flex:none; }
+.switch input { opacity:0; width:0; height:0; }
+.switch .slider { position:absolute; cursor:pointer; inset:0; background:#2d333b; border-radius:24px; transition:.2s; }
+.switch .slider::before { content:''; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:#e6edf3; border-radius:50%; transition:.2s; }
+.switch input:checked + .slider { background:var(--accent); }
+.switch input:checked + .slider::before { transform:translateX(18px); }
 .hstat { display:flex; gap:16px; font-size:12px; color:var(--muted); }
 .hstat b { color:var(--text); }
 main { max-width:1240px; margin:0 auto; padding:20px 24px 60px; }
@@ -259,6 +266,16 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
   <section id="tab-memory" style="display:none">
     <div class="panel">
       <h2>记忆库 <span style="font-weight:400;color:var(--muted);font-size:12px">（AI 从这里学习你的偏好与纠正；零 LLM 规则记录，纯本地）</span></h2>
+      <div id="mem-toggle-row" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#161b22">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">记忆层 <span id="mem-toggle-state" style="font-size:12px;font-weight:400;color:var(--muted)"></span></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">开启后自动记录常用模型/推理档位/你的纠正，并在相关对话时注入（默认关闭，适合不需要记忆的用户）</div>
+        </div>
+        <label class="switch" title="记忆层总开关（写回 config.json，立即生效，无需重启）">
+          <input type="checkbox" id="mem-toggle" onchange="toggleMemoryEnabled()">
+          <span class="slider"></span>
+        </label>
+      </div>
       <div id="mem-stats" style="margin-bottom:10px;font-size:13px;color:var(--muted)"></div>
       <div class="row" style="margin-bottom:10px">
         <button onclick="newMemory()">＋ 手动添加</button>
@@ -1191,11 +1208,17 @@ async function delSkill(id) {
 
 // ---------- 记忆 ----------
 let memCache = [];
+let memEnabled = false;
 function kindLabel(k) { return ({ preference: '偏好', correction: '纠正', habit: '习惯', project: '项目', feedback: '反馈' })[k] || k; }
 async function refreshMemory() {
   try {
     const d = await api('/api/memory');
     const s = d.stats || {};
+    memEnabled = !!d.enabled;
+    const t = $('mem-toggle');
+    if (t.checked !== memEnabled) t.checked = memEnabled;
+    $('mem-toggle-state').textContent = memEnabled ? '已开启' : '已关闭（默认）';
+    $('mem-toggle-state').style.color = memEnabled ? 'var(--ok)' : 'var(--muted)';
     $('mem-stats').innerHTML = `共 <b>${s.total ?? 0}</b> 条 · 稳定事实 ${s.static_count ?? 0} · 纠正 ${s.corrections ?? 0}`;
     const items = d.memories || [];
     memCache = items;
@@ -1210,6 +1233,22 @@ async function refreshMemory() {
           <button class="ghost sm" onclick="delMemAt(${i})">删除</button>
         </td></tr>`).join('')}</tbody></table>` : '<div class="empty">还没有记忆 — 正常使用即可自动积累，或点「手动添加」</div>';
   } catch (e) { $('mem-wrap').innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; }
+}
+async function toggleMemoryEnabled() {
+  const t = $('mem-toggle');
+  const target = t.checked;
+  t.disabled = true;
+  try {
+    const r = await api('/api/memory/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: target }) });
+    memEnabled = !!(r && r.enabled !== undefined ? r.enabled : target);
+    if (t.checked !== memEnabled) t.checked = memEnabled;
+    $('mem-toggle-state').textContent = memEnabled ? '已开启' : '已关闭（默认）';
+    $('mem-toggle-state').style.color = memEnabled ? 'var(--ok)' : 'var(--muted)';
+    toast((r && r.message) || (memEnabled ? '记忆层已开启' : '记忆层已关闭'), 5000);
+  } catch (e) {
+    t.checked = memEnabled; // 失败回滚
+    toast('切换失败：' + e.message);
+  } finally { t.disabled = false; }
 }
 function newMemory() {
   $('mem-editor').style.display = '';

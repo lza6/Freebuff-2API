@@ -278,8 +278,12 @@ impl Default for GravityContext {
 
 impl WebClient {
     pub fn new(cookie: String, model: String) -> Result<Self> {
+        // 流式响应不受整体 timeout 影响：reqwest 的 .timeout() 是「总请求」超时，对流式会截断
+        // （v0.7.3 修复：此前 300s 总超时会把仍在增量的长流硬生生掐断，客户端表现为
+        //  ERR_INCOMPLETE_CHUNKED_ENCODING）。与 upstream.rs 同款做法：read_timeout =
+        //  单次读块超时——只要增量还在吐就一直收，只有完全静默 5 分钟才断。
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(300))
+            .read_timeout(Duration::from_secs(300))
             .user_agent(crate::upstream::DESKTOP_UA)
             .connect_timeout(Duration::from_secs(15))
             .cookie_store(true)

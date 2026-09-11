@@ -71,6 +71,13 @@ async fn main() -> anyhow::Result<()> {
     // 记忆层（用户偏好/纠正；零 LLM 规则 observe）
     let memory = Arc::new(freebuff2api::memory::MemoryStore::open(PathBuf::from(&cfg.memory_path))?);
     tracing::info!("记忆库 SQLite: {}", cfg.memory_path);
+    // 记忆层运行时开关（默认关闭——用户批注：记忆不是每个人都需要的；面板可热切换）
+    let memory_runtime_enabled = Arc::new(std::sync::atomic::AtomicBool::new(cfg.memory_enabled));
+    if cfg.memory_enabled {
+        tracing::info!("记忆层已开启（config memory_enabled=true）");
+    } else {
+        tracing::info!("记忆层已关闭（默认；面板「记忆」页可开启）");
+    }
 
     // 技能系统（文件为真相源 + SQLite 索引；旧 prompts 保留兼容）
     // 注意：不用 with_extension（目录名含 '.' 时会被截断，如 data/my.skills → data/my.sqlite）
@@ -127,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
         meta,
         api_keys,
         web_threads,
+        memory_runtime_enabled,
         started: std::time::Instant::now(),
     };
 

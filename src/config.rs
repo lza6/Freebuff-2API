@@ -90,7 +90,8 @@ impl Default for Config {
             thread_cleanup_interval_sec: 3600,
             thread_max_age_hours: 24,
             web_threads_path: "data/web_threads.json".into(),
-            memory_enabled: true,
+            // 记忆默认关闭（用户批注 2026-09-11：记忆不是每个人都需要的，要有单独开关且默认关）
+            memory_enabled: false,
             skills_dir: "data/skills".into(),
             skills_inject_mode: "roster".into(),
             max_roster_tokens: 2000,
@@ -180,6 +181,9 @@ impl Config {
         }
         if let Ok(v) = env::var("WEB_THREADS_PATH") {
             self.web_threads_path = v;
+        }
+        if let Ok(v) = env::var("MEMORY_ENABLED") {
+            self.memory_enabled = v == "1" || v.eq_ignore_ascii_case("true");
         }
         if let Ok(v) = env::var("SKILLS_DIR") {
             self.skills_dir = v;

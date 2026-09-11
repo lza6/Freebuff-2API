@@ -43,7 +43,7 @@
 
 ## 明确不做 / Backlog（沿用）
 
-- 桥接错误检测点前移（StreamEncoder 旁路）→ v0.7.x
+- ~~桥接错误检测点前移~~ → ✅ v0.7.2 已完成（commit bb9f7b4）
 - SSE 攒批提交（NewAPI-Gateway 模式）
 - web 版 agent-runs/stream、web 版广告链、视频上传
 - 密码学随机 Key、桌面版多账号轮询增强

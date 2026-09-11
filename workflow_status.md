@@ -28,8 +28,8 @@
 | J4 | 登录路径优先级统一：方案 A=内嵌窗口（openEmbedLogin → /api/login/embed）> 扩展直连 > 方案 B=剪贴板 > 手动向导 | `src/web.rs` + `src/api.rs` | ✅ DONE |
 | J5 | 降级链：WebView2 初始化失败 → 明确报错提示装 Runtime 或用扩展/手动向导 | map_err 文案 | ✅ DONE |
 | J6 | **真实 E2E（已完成两轮真实窗口验证）**：① 窗口真实弹出 + WebView2 真实渲染 + 用户关窗 → stderr 正确输出"窗口已关闭但未完成登录"（report(1) 真实执行）；② 60s 未登录 → timeout 124（超时语义正确）；③ 全程网关不受影响（healthz 200）、凭证文件未被误改。**完整成功路径（人工登录 GitHub → 自动入库）需用户配合一次** | 证据（本文件） | 部分 DONE |
-| J7 | 独立审查 + 修复 | 报告 | PENDING |
-| J8 | CHANGELOG/README + 发布 v0.7.0 | release | PENDING |
+| J7 | 独立审查（Critic-J）+ 修复 | 报告 | ✅ DONE（CONDITIONAL PASS：1×P1 Linux 构建破坏→平台门控修复；3×P2 防重入/降级可见性/UI 卡顿→全修；P3 注释修正） |
+| J8 | CHANGELOG/README + 发布 v0.7.0 | release | ✅ DONE（commit d09397a，Release: github.com/lza6/Freebuff-2API/releases/tag/v0.7.0） |
 
 ## J6 真实 E2E 证据（2026-09-11）
 

@@ -120,5 +120,6 @@
 ## Next Gate
 
 - **Phase G 已完结**：commit `822d735` 已推送 `main`，tag `v0.5.0` 已推送，Release 已创建（https://github.com/lza6/Freebuff-2API/releases/tag/v0.5.0）。
+- **ext-builder 收尾确认（发布后）**：done:true 同步完成路径已实现并纳入发布 commit（42 项扩展桩测试 + 13 项契约对齐全过；期间顺带修掉"失败时端口序列跑两遍"的真实 bug）。主控复核：node --check 全过 + done 契约 6/6 对齐 + 工作树与 HEAD 一致。
 - 遗留（已记录、非阻塞）：/v1/models 鉴权（HEAD 既有）、config.json 原子写、web 版 agent-runs/stream 与 web 广告链（U4 P1-P2）、扩展真实浏览器全流程人工验证。
 - 密码学随机 API Key（当前 UUIDv4）、SSE 攒批提交（NewAPI-Gateway 模式）列入 v0.6.0 候选。

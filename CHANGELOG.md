@@ -2,6 +2,21 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.3] - 2026-09-11
+
+### 修复
+
+- **web 流不再被 300s 总超时截断**（`ERR_INCOMPLETE_CHUNKED_ENCODING`）：`WebClient` 由 reqwest `.timeout(300s)`（总请求超时，流式增量还在吐也会被整点掐断）改为 `read_timeout(300s)`（单次读块超时，与上游客户端同款）——只要增量还在就一直收，仅完全静默 5 分钟才断。
+- **桥接 token 记账不再永远为 0**：上游 web 协议 SSE 不返回 usage（done 事件为空），改为按内容长度估算输入/输出 token（输入=发出内容，输出=转换后 chunk 正文+推理；每 2 字符≈1 token，偏保守不虚报）。面板用量、趋势、请求详情恢复正常展示。
+
+### 变更
+
+- **记忆层独立总开关（默认关闭）**：
+  - `config.rs` 默认 `memory_enabled: false`（用户批注：记忆不是每个人都需要的）
+  - 新增 `POST /api/memory/toggle`：热切换关/开，关闭后既不自动记录也不注入 system；写回 config.json 立即生效，无需重启
+  - `GET /api/memory` 回传 `enabled` 状态；面板「记忆」页顶部新增 switch 开关
+  - 新增 `MEMORY_ENABLED` 环境变量覆盖
+
 ## [0.7.0] - 2026-09-11
 
 ### 新增

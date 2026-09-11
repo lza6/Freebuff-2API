@@ -49,11 +49,23 @@ docker run -d -p 47821:47821 -v /data:/data freebuff2api
   "http_proxy": "http://127.0.0.1:10808",
   "ad_providers": ["gravity"],
   "sqlite_path": "data/freebuff2api.sqlite",
-  "token_saver": false
+  "token_saver": false,
+  "memory_enabled": false
 }
 ```
 
-环境变量优先：`AUTH_TOKENS` / `API_KEYS` / `HTTP_PROXY` / `LISTEN_ADDR` / `AD_PROVIDERS` / `SQLITE_PATH`。
+环境变量优先：`AUTH_TOKENS` / `API_KEYS` / `HTTP_PROXY` / `LISTEN_ADDR` / `AD_PROVIDERS` / `SQLITE_PATH` / `MEMORY_ENABLED`。
+
+### 记忆层（可选，默认关闭）
+
+网关内置一个**零 LLM 规则**的本地记忆库（SQLite，`data/memory.sqlite`）：纯确定性规则自动记录「常用模型 / 推理档位降级 / 你的纠正（"记住…"、"别再…"、"always/never"）」与手动条目，并在相关对话时以低权威注入 system 前缀。
+
+- **默认关闭**：`memory_enabled: false`。记忆不是每个人都需要的，不需要时保持关闭，请求零额外注入。
+- **开启方式**：
+  1. 面板「记忆」页顶部 switch 一键开启（`POST /api/memory/toggle`，写回 config.json **立即热生效，无需重启**）；
+  2. 或 config.json 设 `"memory_enabled": true` 后重启；
+  3. 或环境变量 `MEMORY_ENABLED=true`。
+- 关闭状态既不自动记录也不注入任何记忆内容；数据保留在 `data/memory.sqlite`，重新开启后继续可用。
 
 ## API
 

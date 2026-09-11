@@ -125,6 +125,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const a2 = ((r2.json || {}).choices || [{}])[0].message?.content || '';
     ok('4.2 第 2 轮 200 且答出代号（跨请求上下文生效 = thread 复用）', r2.status === 200 && a2.includes(NAME), `answer=${JSON.stringify(a2.slice(0, 60))}`);
     // 绑定文件确认 thread 复用
+    fs.mkdirSync('data/e2e', { recursive: true });
+    if (!fs.existsSync('data/e2e/web_threads.json')) { fs.writeFileSync('data/e2e/web_threads.json', '{}'); }
     const bind = JSON.parse(fs.readFileSync('data/e2e/web_threads.json', 'utf8'));
     const turns = Math.max(...Object.values(bind).map(v => v.turns), 0);
     ok('4.3 thread 绑定 turns>0（续聊确实在复用，未重开会话烧额度）', turns > 0, `turns=${turns}`);

@@ -1720,8 +1720,16 @@ async fn handle_chat_completions(State(st): State<AppState>, headers: HeaderMap,
     // 让「照着接入指南填 /v1」的浏览器用户真正能对话。
     // 会话复用：续聊轮次只发最后一条用户消息 + 复用同一个上游 thread，
     // 避免每次请求都新开 thread 烧光每日会话准入（rateLimitsByModel.limit）。
-    let has_pool_accounts = !st.pool.snapshot().await.accounts.is_empty();
-    if !has_pool_accounts {
+    // 池里有账号还不够——占位符（如 __TEST_SKIP__）或已失效的 Bearer 会挡住桥接又必然 401。
+    // 池内全是占位符（长度 < 20 或命中已知占位模式）时视为"没有可用账号"，走桥接。
+    let pool_tokens: Vec<String> = {
+        let accounts = st.pool.accounts.lock().await;
+        accounts.iter().map(|a| a.token.clone()).collect()
+    };
+    let pool_has_usable = pool_tokens
+        .iter()
+        .any(|tok| tok.len() >= 20 && !tok.starts_with("__TEST_SKIP__"));
+    if !pool_has_usable {
         if let Some((cookie, cred, cid)) = pick_web_cookie(&st) {
             if cookie.contains("session-token") {
                 return web_bridge_openai(st, parsed, requested, model, cookie, cred, cid).await;
@@ -2260,9 +2268,15 @@ async fn handle_claude_messages(State(st): State<AppState>, headers: HeaderMap, 
     }
     let resolved = st.router.resolve(&model).await;
 
-    // ---------- Web-Cookie 桥接（与 /v1/chat/completions 相同策略） ----------
-    let has_pool_accounts = !st.pool.snapshot().await.accounts.is_empty();
-    if !has_pool_accounts {
+    // ---------- Web-Cookie 桥接（与 /v1/chat/completions 相同策略，含占位符保护） ----------
+    let pool_tokens: Vec<String> = {
+        let accounts = st.pool.accounts.lock().await;
+        accounts.iter().map(|a| a.token.clone()).collect()
+    };
+    let pool_has_usable = pool_tokens
+        .iter()
+        .any(|tok| tok.len() >= 20 && !tok.starts_with("__TEST_SKIP__"));
+    if !pool_has_usable {
         if let Some((cookie, cred, cid)) = pick_web_cookie(&st) {
             if cookie.contains("session-token") {
                 // Claude messages → OpenAI messages 复用现有转换（含 system/blocks/tool_use）
@@ -4093,5 +4107,17 @@ mod tests {
         assert_eq!(detect_bridge_error(false_pos), None);
         // 空流
         assert_eq!(detect_bridge_error(""), None);
+    }
+
+    #[test]
+    fn placeholder_tokens_do_not_block_bridge() {
+        // 用户 config 里常见占位符（__TEST_SKIP__ 等）会让账号池"看似非空"，
+        // 既阻断 web 桥接又在桌面协议上必然 401（Cherry Studio 场景实测复现）。
+        // 判定规则：token 长度 >= 20 且不以 __TEST_SKIP__ 开头才算"可用 Bearer"。
+        let usable = |tok: &str| tok.len() >= 20 && !tok.starts_with("__TEST_SKIP__");
+        assert!(!usable("__TEST_SKIP__"), "占位符不得视为可用");
+        assert!(!usable("short"), "超短 token 不得视为可用");
+        assert!(usable("__Secure-next-auth.session-token=abc123; x=1"), "真实长 token 可用");
+        // 注意：web-cookie 凭证根本不该进池（v0.5.0 修复），这里只兜底占位符场景
     }
 }

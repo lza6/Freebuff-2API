@@ -64,6 +64,56 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .card:hover { transform:translateY(-1px); border-color:#3a4250; }
 .card .num { font-size:26px; font-weight:700; margin-top:var(--sp-1); }
 .card .lbl { color:var(--muted); font-size:13px; }
+/* ===== v0.11 总览视觉升级：分层统计卡 + 趋势 / 条形图 / 表格语义色 ===== */
+.cards { grid-template-columns:1.4fr 1fr 1fr .95fr; }
+@media(max-width:1100px){ .cards{ grid-template-columns:1fr 1fr } }
+@media(max-width:640px){ .cards{ grid-template-columns:1fr } }
+.stat { position:relative; background:linear-gradient(180deg,#171d26,#131920); border:1px solid #262d38; border-radius:var(--r-lg); padding:15px 17px 14px; min-height:106px; box-shadow:0 1px 2px rgba(0,0,0,.5); overflow:hidden; transition:border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.stat:hover { transform:translateY(-1px); border-color:#39424f; }
+.stat::before { content:''; position:absolute; inset:0 0 auto; height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,.09),transparent); }
+.stat .k { font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#7d8695; font-weight:600; display:flex; align-items:center; gap:6px; }
+.stat .k .ico { font-size:13px; opacity:.85; }
+.stat .v { font-size:31px; font-weight:700; line-height:1.12; margin-top:7px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; color:#e6edf3; }
+.stat:has(.spark) .v { padding-right:92px; }
+.stat .s { font-size:12px; color:#8b949e; margin-top:6px; font-variant-numeric:tabular-nums; display:flex; gap:10px; flex-wrap:wrap; }
+.stat .s b { color:#c3ccd8; font-weight:600; }
+.stat .spark { position:absolute; right:15px; top:36px; opacity:.9; }
+/* 错误卡：有错误才红，错误率高再加重 */
+.stat.danger { border-color:#5a2128; background:linear-gradient(180deg,#1b1419,#151215); }
+.stat.danger .v { color:#ff7b72; }
+.stat.danger .k { color:#b9808a; }
+.stat.clean { border-color:#1d3a2a; }
+.stat.clean .v { color:#56d364; }
+/* 环形健康度 */
+.ring { width:56px; height:56px; flex:none; }
+.ring circle { fill:none; stroke-width:6; }
+.ring .bg { stroke:#242c37; }
+.ring .fg { stroke:var(--ok); stroke-linecap:round; transition:stroke-dashoffset .6s var(--ease-out); transform:rotate(-90deg); transform-origin:50% 50%; }
+/* 用量条形图 */
+.bars { display:flex; flex-direction:column; gap:7px; }
+.bar-row { display:grid; grid-template-columns:44px minmax(0,1fr) 88px 78px; align-items:center; gap:10px; font-size:12.5px; }
+.bar-date { color:#8b949e; font-variant-numeric:tabular-nums; }
+.bar-model { color:#c3ccd8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bar-track { height:7px; background:#1d242e; border-radius:99px; overflow:hidden; }
+.bar-track i { display:block; height:100%; border-radius:99px; background:linear-gradient(90deg,#2f6fe0,#5aa0ff); }
+.bar-track i.has-err { background:linear-gradient(90deg,#a63b3b,#e5534b); }
+.bar-num { text-align:right; font-variant-numeric:tabular-nums; color:#e6edf3; font-weight:600; }
+.bar-err { color:#ff7b72; font-size:11px; }
+.bars-foot { display:flex; justify-content:space-between; margin-top:11px; padding-top:10px; border-top:1px solid var(--border); font-size:12px; color:#8b949e; font-variant-numeric:tabular-nums; }
+.bars-foot b { color:#e6edf3; }
+/* 请求表：状态左色条 + 延迟色阶 */
+table.reqlist tbody tr td:first-child { border-left:2px solid transparent; }
+table.reqlist tbody tr.is-ok td:first-child { border-left-color:#2ea043; }
+table.reqlist tbody tr.is-warn td:first-child { border-left-color:#d29922; }
+table.reqlist tbody tr.is-err td:first-child { border-left-color:#f85149; }
+table.reqlist tbody tr.is-err { background:rgba(248,81,73,.045); }
+table.reqlist tbody tr:hover { background:#1c2129; }
+.lat-fast { color:#56d364; } .lat-mid { color:#d29922; } .lat-slow { color:#ff7b72; }
+.mono { font-variant-numeric:tabular-nums; }
+/* 区块标题统一更强 */
+.panel > h2 { display:flex; align-items:center; gap:8px; }
+.panel > h2 .sub { font-weight:400; font-size:12px; color:#6e7681; }
+
 .grid { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-5); }
 @media(max-width:920px){ .grid{grid-template-columns:1fr} }
 .panel { background:var(--card); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--sp-4); margin-bottom:var(--sp-5); box-shadow:var(--sh-card); }
@@ -115,6 +165,23 @@ details { margin:6px 0; } summary { cursor:pointer; color:var(--muted); font-siz
 .wizard-flash { animation:wizardFlash .8s ease-in-out 2; }
 /* 窄屏导航横向滚动（v0.8 可访问性） */
 @media(max-width:640px){ nav{ flex-wrap:nowrap; overflow-x:auto; } nav button{ flex:none; min-height:44px; } button:not(.sm), input, select, textarea { min-height:44px; } }
+/* 窄屏整体收敛：header 换行、状态不逐字折行、内容不横向溢出（v0.11） */
+body { overflow-x:hidden; }
+.hstat { white-space:nowrap; }
+@media(max-width:760px){
+  header { flex-wrap:wrap; gap:10px; padding:10px 14px; }
+  header h1 { font-size:15px; }
+  header .hstat { font-size:11.5px; gap:10px; order:3; width:100%; }
+  header input#api-key-input { width:100% !important; order:2; }
+  main { padding:14px 14px 48px; }
+  .stat { min-height:88px; padding:12px 15px; }
+  .stat .v { font-size:27px; }
+  .stat .spark { top:30px; right:12px; }
+  th, td { padding:6px 7px; font-size:12.5px; }
+  .bar-row { grid-template-columns:38px minmax(0,1fr) 56px 62px; gap:7px; font-size:12px; }
+  .banner { padding:12px 14px; overflow-wrap:anywhere; }
+  .banner .row { flex-wrap:wrap; }
+}
 </style>
 </head>
 <body>
@@ -542,6 +609,9 @@ function showTab(name) {
   for (const t of ['overview','play','account','skills','memory','logs','teach','doctor','guide','settings','about']) {
     const el = $('tab-' + t); if (el) el.style.display = (t === name) ? '' : 'none';
   }
+  // 总览专属区块：统计卡与 30 分钟速率行。其余 tab 不再占首屏（切页更干净）
+  const ovOnly = (name === 'overview') ? '' : 'none';
+  ['cards', 'cost-line'].forEach(function (id) { const el = $(id); if (el) el.style.display = ovOnly; });
   if (name === 'skills') refreshSkills();
   if (name === 'memory') refreshMemory();
   if (name === 'doctor') refreshDoctor();
@@ -903,6 +973,30 @@ function fillGuide(g) {
 let lastHealth = null;
 let authWarned = false;      // 鉴权失败只提示一次，不狂闪
 let overviewTimer = null;    // 总览自动刷新句柄（鉴权失败时暂停，填 Key 后恢复）
+// 极简趋势线（纯 SVG 内联，无外部依赖）
+function sparkline(values, w, h) {
+  w = w || 80; h = h || 28;
+  if (!values || !values.length) return '';
+  const max = Math.max.apply(null, values.concat([1]));
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const pts = [];
+  for (let i = 0; i < values.length; i++) {
+    const x = values.length > 1 ? i * step : w / 2;
+    const y = h - 2 - (values[i] / max) * (h - 5);
+    pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+  }
+  const head = '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" aria-hidden="true">';
+  // 单点画圆，多点画折线 + 末端圆点
+  if (pts.length === 1) {
+    const p = pts[0].split(',');
+    return head + '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="2.6" fill="#5aa0ff"/></svg>';
+  }
+  const last = pts[pts.length - 1].split(',');
+  return head +
+    '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#5aa0ff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" opacity=".9"/>' +
+    '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="2.4" fill="#5aa0ff"/></svg>';
+}
+
 async function refreshOverview() {
   try {
     const health = await api('/healthz');
@@ -913,18 +1007,51 @@ async function refreshOverview() {
     const alive = accs.filter(a => a.healthy).length;
     $('hstat').innerHTML = `账号 <b>${alive}/${accs.length}</b> · 运行 <b>${Math.floor((health.uptime_sec || 0) / 60)}m</b>`;
     const totals = await api('/api/usage/totals');
-    const cards = [
-      ['总请求', totals.total_requests ?? 0],
-      ['总 Token', (totals.total_tokens ?? 0).toLocaleString()],
-      ['错误', totals.errors ?? 0],
-      ['账号', `${alive}/${accs.length}`],
-    ];
-    $('cards').innerHTML = cards.map(([l, n]) => `<div class="card"><div class="lbl">${l}</div><div class="num">${n}</div></div>`).join('');
-    // 速率与错误率（免费层无货币成本，诚实标注来源）
-    try {
-      const cost = await api('/api/usage/cost');
-      $('cost-line').innerHTML = `近 ${cost.window_minutes} 分钟：<b>${cost.requests_30m}</b> 请求 · 错误率 <b>${((cost.error_rate_30m || 0) * 100).toFixed(0)}%</b> · 平均延迟 <b>${((cost.avg_latency_ms_30m || 0) / 1000).toFixed(1)}s</b> · 约 <b>${cost.requests_per_hour}</b> 请求/小时 <span style="opacity:.7">（${esc(cost.cost_source || '')}）</span>`;
-    } catch (e) { $('cost-line').textContent = ''; }
+    const daily = await api('/api/usage/daily');
+    let cost = null;
+    try { cost = await api('/api/usage/cost'); } catch (e) { cost = null; }
+    const tr = totals.total_requests || 0;
+    const er = totals.errors || 0;
+    const errRate = tr ? er / tr : 0;
+    const healthPct = tr ? Math.round((1 - errRate) * 100) : 100;
+    // 近 7 天每日请求数（趋势线数据）
+    const byDay = {};
+    (daily || []).forEach(function (d) { byDay[d.date] = (byDay[d.date] || 0) + (d.requests || 0); });
+    const dayKeys = Object.keys(byDay).sort().slice(-7);
+    const dayVals = dayKeys.map(function (k) { return byDay[k]; });
+    const weekTotal = dayVals.reduce(function (a, b) { return a + b; }, 0);
+    const errCls = errRate > 0.2 ? 'danger' : (errRate > 0.02 ? 'warn' : 'clean');
+    $('cards').innerHTML =
+      '<div class="stat">' +
+        '<div class="k"><span class="ico">📊</span>总请求</div>' +
+        '<div class="v">' + tr.toLocaleString() + '</div>' +
+        '<div class="s"><span>近 7 天 <b>' + weekTotal.toLocaleString() + '</b></span><span>成功率 <b>' + healthPct + '%</b></span></div>' +
+        sparkline(dayVals) +
+      '</div>' +
+      '<div class="stat ' + errCls + '">' +
+        '<div class="k"><span class="ico">' + (errRate > 0.02 ? '⚠️' : '✅') + '</span>错误</div>' +
+        '<div class="v">' + er.toLocaleString() + '</div>' +
+        '<div class="s"><span>错误率 <b>' + (errRate * 100).toFixed(1) + '%</b></span></div>' +
+      '</div>' +
+      '<div class="stat">' +
+        '<div class="k"><span class="ico">🔤</span>总 Token</div>' +
+        '<div class="v">' + (totals.total_tokens || 0).toLocaleString() + '</div>' +
+        '<div class="s"><span>输入 <b>' + (totals.prompt_tokens || 0).toLocaleString() + '</b></span><span>输出 <b>' + (totals.completion_tokens || 0).toLocaleString() + '</b></span></div>' +
+      '</div>' +
+      '<div class="stat">' +
+        '<div class="k"><span class="ico">👤</span>账号</div>' +
+        '<div class="v">' + alive + '/' + accs.length + '</div>' +
+        '<div class="s"><span>' + (cost ? cost.requests_per_hour + ' 请求/小时' : '—') + '</span></div>' +
+      '</div>';
+    // 近 30 分钟运行指标（错误率按阈值着色）
+    if (cost) {
+      const ar = (cost.error_rate_30m || 0) * 100;
+      const arCls = ar > 20 ? 'terr' : (ar > 2 ? 'twarn' : 'tok');
+      $('cost-line').innerHTML = '<span style="opacity:.6">近 ' + cost.window_minutes + ' 分钟</span> · 请求 <b>' + cost.requests_30m +
+        '</b> · 错误率 <b class="' + arCls + '">' + ar.toFixed(0) + '%</b> · 平均延迟 <b>' +
+        ((cost.avg_latency_ms_30m || 0) / 1000).toFixed(1) + 's</b> · ' + cost.requests_per_hour +
+        ' 请求/小时 <span style="opacity:.55">（' + esc(cost.cost_source || '') + '）</span>';
+    } else { $('cost-line').textContent = ''; }
     // 凭证冷却警告（v0.10 §2.2）：熔断账号提示 + 一键去账号页
     const cw = $('cred-warn');
     if (cw) {
@@ -952,18 +1079,48 @@ async function refreshOverview() {
         const cls = (st === 'active' || a.healthy) ? 'ok' : (st === 'queued' ? 'warn' : 'err');
         return `<tr><td>${esc(a.name)}</td><td>${badge(st, cls)}</td><td>${Math.round(a.score ?? 0)}</td><td>${a.session?.instance_id ? esc(String(a.session.instance_id).slice(0, 8)) + '…' : '—'}</td><td>${esc(a.last_error || a.session?.last_error || '')}</td></tr>`;
       }).join('')}</tbody></table>` : '<div class="empty">还没有账号 — 去「账号」页添加</div>';
-    // 用量
-    const daily = await api('/api/usage/daily');
-    $('daily-wrap').innerHTML = (daily && daily.length) ? `<table><thead><tr><th>日期</th><th>模型</th><th>请求</th><th>输入tok</th><th>输出tok</th><th>错误</th></tr></thead><tbody>${
-      daily.slice(0, 30).map(d => `<tr><td>${esc(d.date)}</td><td>${esc(d.model)}</td><td>${d.requests}</td><td>${d.prompt_tokens}</td><td>${d.completion_tokens}</td><td>${d.errors}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">暂无用量 — 发起一次对话后这里会有数据</div>';
-    // 请求
+    // 用量（条形图：一眼看出量级与错误占比；数据已在上方取过）
+    const maxReq = Math.max.apply(null, (daily || []).map(function (d) { return d.requests || 0; }).concat([1]));
+    if (daily && daily.length) {
+      const rows = daily.slice(0, 12);
+      const sumReq = rows.reduce(function (a, d) { return a + (d.requests || 0); }, 0);
+      const sumErr = rows.reduce(function (a, d) { return a + (d.errors || 0); }, 0);
+      const sumTok = rows.reduce(function (a, d) { return a + (d.prompt_tokens || 0) + (d.completion_tokens || 0); }, 0);
+      $('daily-wrap').innerHTML =
+        '<div class="bars">' + rows.map(function (d) {
+          const pct = Math.max(2, ((d.requests || 0) / maxReq) * 100);
+          const hasErr = (d.errors || 0) > 0;
+          return '<div class="bar-row">' +
+            '<span class="bar-date">' + esc(String(d.date).slice(5)) + '</span>' +
+            '<span class="bar-model" title="' + esc(d.model) + '">' + esc(d.model) + '</span>' +
+            '<span class="bar-track"><i class="' + (hasErr ? 'has-err' : '') + '" style="width:' + pct.toFixed(1) + '%"></i></span>' +
+            '<span class="bar-num">' + (d.requests || 0) + (hasErr ? '<span class="bar-err"> ' + d.errors + ' 错</span>' : '') + '</span>' +
+          '</div>';
+        }).join('') + '</div>' +
+        '<div class="bars-foot"><span>合计 <b>' + sumReq.toLocaleString() + '</b> 请求</span>' +
+        '<span>错误 <b class="' + (sumErr ? 'terr' : '') + '">' + sumErr + '</b></span>' +
+        '<span>Token <b>' + sumTok.toLocaleString() + '</b></span></div>';
+    } else { $('daily-wrap').innerHTML = '<div class="empty">暂无用量 — 发起一次对话后这里会有数据</div>'; }
+    // 请求（状态左色条 + 延迟色阶，错误行轻微高亮）
     const reqs = await api('/api/usage/requests');
-    $('reqs-wrap').innerHTML = (reqs && reqs.length) ? `<table><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>状态</th><th>延迟</th><th>Tokens</th></tr></thead><tbody>${
-      reqs.slice(0, 20).map(r => {
-        const cls = r.status < 400 ? 'ok' : (r.status < 500 ? 'warn' : 'err');
-        const tk = (r.prompt_tokens || 0) + (r.completion_tokens || 0);
-        return `<tr class="click" onclick="openDrawer(${r.id})"><td>${fmtTime(r.ts)}</td><td>${esc(r.account)}</td><td>${esc(r.model)}</td><td>${badge(r.status, cls)}</td><td>${(r.latency_ms / 1000).toFixed(2)}s</td><td>${tk || '—'}</td></tr>`;
-      }).join('')}</tbody></table>` : '<div class="empty">暂无请求记录</div>';
+    if (reqs && reqs.length) {
+      $('reqs-wrap').innerHTML = '<table class="reqlist"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>状态</th><th>延迟</th><th>Tokens</th></tr></thead><tbody>' +
+        reqs.slice(0, 20).map(function (r) {
+          const cls = r.status < 400 ? 'ok' : (r.status < 500 ? 'warn' : 'err');
+          const rowCls = r.status < 400 ? 'is-ok' : (r.status < 500 ? 'is-warn' : 'is-err');
+          const tk = (r.prompt_tokens || 0) + (r.completion_tokens || 0);
+          const sec = (r.latency_ms || 0) / 1000;
+          const latCls = sec < 3 ? 'lat-fast' : (sec < 15 ? 'lat-mid' : 'lat-slow');
+          return '<tr class="click ' + rowCls + '" onclick="openDrawer(' + r.id + ')">' +
+            '<td class="mono">' + fmtTime(r.ts) + '</td>' +
+            '<td>' + esc(r.account) + '</td>' +
+            '<td>' + esc(r.model) + '</td>' +
+            '<td>' + badge(r.status, cls) + '</td>' +
+            '<td class="mono ' + latCls + '">' + sec.toFixed(2) + 's</td>' +
+            '<td class="mono">' + (tk || '—') + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table>';
+    } else { $('reqs-wrap').innerHTML = '<div class="empty">暂无请求记录</div>'; }
     // 模型
     const models = await api('/api/usage/models');
     $('model-count').textContent = (models || []).length;

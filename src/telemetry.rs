@@ -674,22 +674,28 @@ mod tests {
         let path = dir.path().join("telemetry.db");
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(SCHEMA).unwrap();
-        let h1 = "2026-09-19T08:00:00.000Z";
-        let h2 = "2026-09-19T09:00:00.000Z";
-        insert_direct(&conn, "a", h1, "acct", "gpt-4o", 500, 100, Some(10));
-        insert_direct(&conn, "b", h1, "acct", "gpt-4o", 200, 100, Some(10));
-        insert_direct(&conn, "c", h1, "acct", "gpt-4o", 200, 100, Some(10));
-        insert_direct(&conn, "d", h1, "acct", "gpt-4o", 200, 100, Some(10));
-        insert_direct(&conn, "e", h2, "acct", "claude", 200, 100, Some(10));
-        insert_direct(&conn, "f", h2, "acct", "claude", 200, 100, Some(10));
+        // 时间相对化：insights 只统计最近 24h，硬编码日期会随时间流逝滑出窗口（测试必红）
+        let h1_dt = Utc::now() - chrono::Duration::hours(1);
+        let h2_dt = Utc::now();
+        let h1 = h1_dt.to_rfc3339();
+        let h2 = h2_dt.to_rfc3339();
+        // hour_utc 取 ts 前 13 字符（YYYY-MM-DDTHH）
+        let h1_key = &h1[..13];
+        let h2_key = &h2[..13];
+        insert_direct(&conn, "a", &h1, "acct", "gpt-4o", 500, 100, Some(10));
+        insert_direct(&conn, "b", &h1, "acct", "gpt-4o", 200, 100, Some(10));
+        insert_direct(&conn, "c", &h1, "acct", "gpt-4o", 200, 100, Some(10));
+        insert_direct(&conn, "d", &h1, "acct", "gpt-4o", 200, 100, Some(10));
+        insert_direct(&conn, "e", &h2, "acct", "claude", 200, 100, Some(10));
+        insert_direct(&conn, "f", &h2, "acct", "claude", 200, 100, Some(10));
 
         let v = insights(path.to_str().unwrap(), 24).unwrap();
         let arr = v["worst_hours"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0]["hour_utc"], "2026-09-19T08");
+        assert_eq!(arr[0]["hour_utc"], h1_key);
         assert_eq!(arr[0]["requests"], 4);
         assert_eq!(arr[0]["error_rate"], 0.25);
-        assert_eq!(arr[1]["hour_utc"], "2026-09-19T09");
+        assert_eq!(arr[1]["hour_utc"], h2_key);
         assert_eq!(arr[1]["error_rate"], 0.0);
     }
 

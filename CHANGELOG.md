@@ -2,6 +2,12 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.4] - 2026-10-23
+
+### 修复
+
+- **测试时间炸弹**：`telemetry::tests::insights_worst_hours_ranking` 硬编码 `2026-09-19` 时间戳，而 `insights()` 仅统计最近 24h（`window_hours=24`）→ 窗口滑过后用例必然失败（`worst_hours` 空数组，断言 `left: 0, right: 2`），自 2026-09-20 起 `cargo test`/CI 必红。改为相对时间（`Utc::now() - 1h` 与 `Utc::now()`）并由时间戳截取 `hour_utc` 期望值，行为语义不变
+
 ## [0.10.3] - 2026-09-19
 
 ### 测试/质量

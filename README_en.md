@@ -2,6 +2,17 @@
 
 > English version. 中文文档：[README.md](README.md)
 
+> ## ⚠️ Status (verified 2026-10-23)
+>
+> **Chat forwarding is currently non-functional.** Upstream deprecated the web transport
+> (`409 chat_moved`) and put the bearer transport behind a client-version gate plus a
+> CLI-only policy (`403 free_mode_cli_required`, with an explicit warning that calling the
+> API directly may get your account banned).
+>
+> Full reverse-engineering record: [`docs/UPSTREAM_PROTOCOL_2026-10.md`](docs/UPSTREAM_PROTOCOL_2026-10.md).
+> **Still working**: dashboard, credential management, account health, usage/telemetry,
+> doctor, import/export, skills & memory layers. Details in [README_zh.md](README_zh.md).
+
 Freebuff2API reverse-engineers the [Freebuff](https://freebuff.com) free tier into **OpenAI-compatible** and **Anthropic-compatible** local API endpoints. Implemented in **Rust (axum)** — single binary, zero runtime deps — usable from Claude Code, Codex, Cursor, LobeChat, or any OpenAI SDK.
 
 ## Features

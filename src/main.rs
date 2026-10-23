@@ -20,7 +20,12 @@ async fn main() -> anyhow::Result<()> {
         let port = std::env::var("GATEWAY_PORT")
             .ok()
             .and_then(|p| p.parse().ok());
-        let code = freebuff2api::login_window::run_login_window(port);
+        // 子进程通过 GATEWAY_PROXY 继承网关的 http_proxy：Google OAuth 域名（accounts.google.com）
+        // 在多数网络环境需代理可达，而 WebView2 实例默认不吃系统代理 → 登录页 ERR_CONNECTION_CLOSED
+        let proxy = std::env::var("GATEWAY_PROXY")
+            .ok()
+            .filter(|p| !p.is_empty());
+        let code = freebuff2api::login_window::run_login_window(port, proxy);
         std::process::exit(code);
     }
 

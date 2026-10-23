@@ -2,6 +2,22 @@
 
 > Rust(axum) 版。主文档：[README.md](README.md)｜English: [README_en.md](README_en.md)
 
+> ## ⚠️ 状态说明（2026-10-23 实测）
+>
+> **对话转发功能当前不可用。** 上游 Freebuff 在 2026-09~10 期间做了两次破坏性变更：
+>
+> 1. **web 通道已废弃**：`POST freebuff.com/api/chat/stream` 现返回 `409 chat_moved`，网页端已迁到 workspace v1 协议。
+> 2. **bearer 通道被政策封堵**：`POST codebuff.com/api/v1/chat/completions` 返回
+>    `403 free_mode_cli_required`，服务端原文明确「免费模式仅限官方 CLI，直接调用 API 可能封号」。
+>
+> 因此本项目**不再能**把免费模型转成 OpenAI/Anthropic 兼容接口。完整逆向记录、协议规格与
+> 复现方法见 [`docs/UPSTREAM_PROTOCOL_2026-10.md`](docs/UPSTREAM_PROTOCOL_2026-10.md)。
+>
+> **仍然可用**：控制台面板、凭证登录与入库、账号健康看板、用量/遥测统计、doctor 体检、
+> 配置导入导出、技能与记忆层 —— 这些不依赖上游聊天协议。
+>
+> 若你需要程序化调用免费模型，目前唯一合规路径是官方 CLI 本身（`npm i -g freebuff`）。
+
 Freebuff2API 把 [Freebuff](https://freebuff.com) 免费层的模型逆向为 **OpenAI 兼容**与 **Anthropic 兼容** 的本地 API 网关。单二进制、零依赖，可在任意 OpenAI/Claude 客户端（Claude Code、Codex、Cursor、LobeChat、NextChat 等）中使用 Freebuff 免费模型。
 
 ---

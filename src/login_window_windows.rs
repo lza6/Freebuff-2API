@@ -32,8 +32,12 @@ pub fn is_login_mode() -> bool {
 
 /// 运行登录窗口子进程（blocking，tao 事件循环 `run()` 返回 `!`，不会真正返回到调用方）。
 /// 保留返回类型以便测试与未来变化；实际控制流经 `process::exit` 直接结束进程。
-pub fn run_login_window(gateway_port: Option<u16>) -> i32 {
-    match run_login_window_inner(gateway_port) {
+///
+/// `proxy`：网关 `config.http_proxy`（如 `http://127.0.0.1:10808`）。OAuth 提供方域名
+/// （`accounts.google.com` 等）在多数网络环境需代理可达，而 WebView2 实例默认不吃系统代理，
+/// 不传就会在登录跳转时 `ERR_CONNECTION_CLOSED`。
+pub fn run_login_window(gateway_port: Option<u16>, proxy: Option<String>) -> i32 {
+    match run_login_window_inner(gateway_port, proxy) {
         Ok(msg) => {
             println!("{msg}");
             0
@@ -45,8 +49,9 @@ pub fn run_login_window(gateway_port: Option<u16>) -> i32 {
     }
 }
 
-fn run_login_window_inner(gateway_port: Option<u16>) -> Result<String> {
+fn run_login_window_inner(gateway_port: Option<u16>, proxy: Option<String>) -> Result<String> {
     use wry::WebViewBuilder;
+    use wry::WebViewBuilderExtWindows;
 
     let ports: Vec<u16> = gateway_port.map(|p| vec![p]).unwrap_or_else(|| {
         // GATEWAY_PORT 环境变量优先（网关 spawn 时会带）；否则按默认序列探测
@@ -66,12 +71,16 @@ fn run_login_window_inner(gateway_port: Option<u16>) -> Result<String> {
         .build(&event_loop)
         .map_err(|e| anyhow!("创建登录窗口失败: {e}"))?;
 
-    let webview = WebViewBuilder::new()
-        .with_url("https://freebuff.com/")
-        .build(&window)
-        .map_err(|e| {
-            anyhow!("初始化 WebView2 失败: {e}（请确认系统已安装 Microsoft Edge WebView2 Runtime）")
-        })?;
+    let mut builder = WebViewBuilder::new().with_url("https://freebuff.com/");
+    // 关键：把网关的 http_proxy 透给 WebView2。WebView2 是独立浏览器实例，不继承本进程代理环境，
+    // 也不吃 Windows 系统代理设置；OAuth 提供方（accounts.google.com）在需代理的网络下
+    // 会直接 ERR_CONNECTION_CLOSED，表现为「Google 登录打不开」。
+    if let Some(p) = proxy.as_deref().filter(|p| !p.is_empty()) {
+        builder = builder.with_additional_browser_args(format!("--proxy-server={p}"));
+    }
+    let webview = builder.build(&window).map_err(|e| {
+        anyhow!("初始化 WebView2 失败: {e}（请确认系统已安装 Microsoft Edge WebView2 Runtime）")
+    })?;
 
     // 抓取当前 Cookie 并尝试入库；返回 Some((exit_code, message)) 表示流程已终结。
     // 独立函数（借 webview），供"首载探测"与"事件循环轮询"两处复用——规避 run() 的 'static 闭包约束。
@@ -198,7 +207,7 @@ fn post_import(port: u16, cookie: &str) -> Result<usize> {
 /// 子进程正常退出（入库成功/超时/关窗）后释放。
 static LOGIN_SPAWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn spawn_login_window(gateway_port: u16) -> bool {
+pub fn spawn_login_window(gateway_port: u16, proxy: Option<&str>) -> bool {
     use std::sync::atomic::Ordering;
     // CAS 抢占：已有一个登录窗口在跑 → 直接拒绝（前端 toast 提示）
     if LOGIN_SPAWNED
@@ -218,6 +227,7 @@ pub fn spawn_login_window(gateway_port: u16) -> bool {
     let child = std::process::Command::new(exe)
         .arg("--login-window")
         .env("GATEWAY_PORT", gateway_port.to_string())
+        .env("GATEWAY_PROXY", proxy.unwrap_or(""))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();

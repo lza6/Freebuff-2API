@@ -2,6 +2,31 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.5] - 2026-10-23
+
+### 修复
+
+- **内嵌登录窗口（WebView2）不吃系统代理**：`--login-window` 子进程现通过 `GATEWAY_PROXY` 继承网关 `config.http_proxy`，
+  并以 `WebViewBuilder::with_additional_browser_args("--proxy-server=…")` 注入。此前在没有全局代理继承的环境下，
+  窗口内点 Google 登录会直接 `ERR_CONNECTION_CLOSED`（实测 `accounts.google.com` / `accounts.youtube.com` 直连不可达，
+  而 `github.com` 可达），登录向导形同不可用。`spawn_login_window` 一并透传代理，非 Windows stub 签名同步。
+
+### 新增
+
+- **`docs/UPSTREAM_PROTOCOL_2026-10.md`**：上游协议变更完整逆向记录（基线 Desktop 0.0.188 / CLI 0.2.34）。包含：
+  - 两条通道失效的逐层证据（`409 chat_moved` → `410 freebuff_update_required` → `403 free_mode_cli_required`）
+  - `session/admission` 完整契约、`agent-runs` 生命周期、`chat/completions` 请求规格
+  - 版本门禁关键头 `x-freebuff-sse-gzip-recovery: 1`
+  - agentId 按模型映射（`base3-free-<model>`）、CLI 终端指纹头 `x-freebuff-env` 格式
+  - 计费模型从 freebucks 改为小时；0 成本模型清单（调试用）
+  - workspace v1 端点群与 `404 Workspace endpoint not found` 的区分用法
+  - 复现命令与离线解包方法（`installer.exe → app-64.7z → orchestrator.js`）
+
+### 变更
+
+- **README 增加状态说明**：明确对话转发当前不可用（上游政策封堵 + 明确封号警告），
+  并列出仍然可用的能力（面板/凭证/健康看板/用量/doctor/导入导出/技能/记忆）。
+
 ## [0.10.4] - 2026-10-23
 
 ### 修复

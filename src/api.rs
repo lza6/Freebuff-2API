@@ -2129,7 +2129,14 @@ async fn handle_login_embed(
         .rsplit_once(':')
         .and_then(|(_, p)| p.parse::<u16>().ok())
         .unwrap_or(47821);
-    let spawned = crate::login_window::spawn_login_window(port);
+    let spawned = crate::login_window::spawn_login_window(
+        port,
+        if st.cfg.http_proxy.is_empty() {
+            None
+        } else {
+            Some(st.cfg.http_proxy.as_str())
+        },
+    );
     if spawned {
         st.logs.emit(
             "info",

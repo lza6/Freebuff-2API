@@ -2,6 +2,16 @@
 
 > 中文文档（Rust 版）。English version: [README_en.md](README_en.md)
 
+> ## ⚠️ 状态说明（2026-10-23 实测）
+>
+> **对话转发功能当前不可用。** 上游已废弃 web 通道（`409 chat_moved`），
+> 并对 bearer 通道加了客户端版本门禁与 CLI 专属策略（`403 free_mode_cli_required`，
+> 服务端明确警告「直接调用 API 可能封号」）。
+>
+> 完整逆向记录与协议规格：[`docs/UPSTREAM_PROTOCOL_2026-10.md`](docs/UPSTREAM_PROTOCOL_2026-10.md)。
+> **仍然可用**：控制台面板、凭证管理、账号健康看板、用量/遥测、doctor、导入导出、技能与记忆层。
+> 详见 [README_zh.md](README_zh.md)。
+
 Freebuff2API 将 [Freebuff](https://freebuff.com) 免费层逆向为 **OpenAI 兼容** 与 **Anthropic 兼容** 的本地 API 网关。**Rust(axum) 实现**，单二进制零依赖，可在任意 OpenAI/Claude 客户端（Claude Code、Codex、Cursor、LobeChat 等）中使用 Freebuff 免费模型。
 
 ## 核心特性

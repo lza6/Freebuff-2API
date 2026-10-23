@@ -15,14 +15,14 @@ pub fn is_login_mode() -> bool {
 
 /// 非 Windows stub：报告不支持（不会真正被调用——main 分派先检查平台）
 #[allow(dead_code)]
-pub fn run_login_window(_gateway_port: Option<u16>) -> i32 {
+pub fn run_login_window(_gateway_port: Option<u16>, _proxy: Option<String>) -> i32 {
     eprintln!("内嵌登录窗口仅支持 Windows（需要 Microsoft Edge WebView2 Runtime）——请改用浏览器扩展或手动导入");
     1
 }
 
 /// 非 Windows stub：返回 false → /api/login/embed 返回 ok:false 引导降级
 #[allow(dead_code)]
-pub fn spawn_login_window(_gateway_port: u16) -> bool {
+pub fn spawn_login_window(_gateway_port: u16, _proxy: Option<&str>) -> bool {
     false
 }
 
@@ -32,8 +32,8 @@ mod tests {
 
     #[test]
     fn stub_reports_unsupported() {
-        assert!(!spawn_login_window(47821));
+        assert!(!spawn_login_window(47821, None));
         assert!(!is_login_mode());
-        assert_eq!(run_login_window(Some(47821)), 1);
+        assert_eq!(run_login_window(Some(47821), None), 1);
     }
 }
